@@ -1,0 +1,2323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AniTrack ⛩ — Excellent Error</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛩</text></svg>"/>
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛩</text></svg>"/>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
+
+<!-- Firebase SDK -->
+<script type="module">
+import { initializeApp }                                from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, createUserWithEmailAndPassword,
+         signInWithEmailAndPassword, updateProfile,
+         signOut, onAuthStateChanged }                  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, doc, setDoc, onSnapshot }        from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey:            "AIzaSyCI7lWURH10Lh0HgUM068CUnk340zXFNL4",
+  authDomain:        "anitrack-c5a17.firebaseapp.com",
+  projectId:         "anitrack-c5a17",
+  storageBucket:     "anitrack-c5a17.firebasestorage.app",
+  messagingSenderId: "516989659951",
+  appId:             "1:516989659951:web:90d47db454e0e3f0cb8fda",
+  measurementId:     "G-JNGEJC347D"
+};
+
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
+
+// ── Firestore save ──────────────────────────────────────────
+window._saveToFirestore = async function(wl){
+  if(!window._currentUser) return;
+  try{
+    await setDoc(doc(db,"watchlists",window._currentUser.uid),{wl});
+  }catch(e){ console.error("Firestore save error:",e); }
+};
+
+// ── Auth state ──────────────────────────────────────────────
+let firestoreUnsub = null;
+onAuthStateChanged(auth, user => {
+  window._currentUser = user || null;
+
+  if(user){
+    // Fix 6: use displayName strictly, never fall back to email
+    const name = (user.displayName && user.displayName.trim())
+      ? user.displayName.trim()
+      : null;
+    const displayName = name || "User";
+    const initials = displayName.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
+
+    // Header button
+    const btn = document.getElementById("auth-btn");
+    if(btn){ btn.textContent=`👤 ${displayName}`; btn.style.color="#00ff88"; }
+    // Update header avatar circle
+    document.getElementById("auth-avatar-initials").textContent = initials;
+    document.getElementById("auth-avatar-initials").style.display = "flex";
+    document.getElementById("auth-avatar-img").style.display = "none";
+    // Check for saved avatar photo
+    const savedAvatar = localStorage.getItem("anitrack_avatar");
+    if(savedAvatar){
+      document.getElementById("auth-avatar-img").src = savedAvatar;
+      document.getElementById("auth-avatar-img").style.display = "block";
+      document.getElementById("auth-avatar-initials").style.display = "none";
+    }
+    document.getElementById("auth-signout").style.display = "block";
+
+    // Fix 5: richer profile card in modal
+    document.getElementById("auth-logged-in-bar").style.display = "block";
+    document.getElementById("auth-form-area").style.display = "none";
+    document.getElementById("auth-logged-in-bar").innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,#a855f7,#00d4ff);display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:900;color:#fff;flex-shrink:0;">${initials}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:14px;font-weight:900;color:#fff;margin-bottom:2px;">${escHtml(displayName)}</div>
+          <div style="font-size:11px;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(user.email)}</div>
+        </div>
+        <div style="background:rgba(0,255,136,0.1);border:1px solid #00ff8833;border-radius:6px;padding:3px 7px;font-size:9px;font-weight:800;color:#00ff88;">✅ LIVE</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px;" id="modal-stats-grid"></div>
+      <div style="font-size:10px;color:#444;margin-bottom:12px;text-align:center;">☁️ Watchlist syncing across all your devices</div>
+      <button onclick="window.doSignOut()" style="width:100%;padding:10px;background:rgba(255,68,102,0.1);border:1px solid #ff446633;border-radius:8px;color:#ff4466;font-weight:700;font-size:12px;cursor:pointer;">Sign Out</button>`;
+    // Populate mini stats
+    const statsGrid = document.getElementById("modal-stats-grid");
+    if(statsGrid && window.WL){
+      const wl = window.WL;
+      const watching  = Object.values(wl).filter(a=>a.status==="Watching").length;
+      const completed = Object.values(wl).filter(a=>a.status==="Completed").length;
+      const total     = Object.keys(wl).length;
+      statsGrid.innerHTML = [
+        ["▶️",watching,"Watching","#00d4ff"],
+        ["✅",completed,"Completed","#00ff88"],
+        ["📚",total,"Total","#a855f7"]
+      ].map(([ic,n,l,c])=>`
+        <div style="background:rgba(255,255,255,0.03);border:1px solid #1a1a2e;border-radius:8px;padding:8px 4px;text-align:center;">
+          <div style="font-size:16px;font-weight:900;color:${c};">${n}</div>
+          <div style="font-size:9px;color:#444;margin-top:1px;">${l}</div>
+        </div>`).join("");
+    }
+
+    // Live Firestore sync
+    if(firestoreUnsub) firestoreUnsub();
+    firestoreUnsub = onSnapshot(doc(db,"watchlists",user.uid), async snap => {
+      if(snap.exists()){
+        const data = snap.data().wl || {};
+        if(Object.keys(data).length > 0){
+          Object.keys(window.WL).forEach(k => delete window.WL[k]);
+          Object.assign(window.WL, data);
+          localStorage.setItem("anitrack_v3", JSON.stringify(data));
+          if(window.renderStats)  window.renderStats();
+          if(window.updateMLTab)  window.updateMLTab();
+          if(window.curTab==="mylist" && window.renderMyList) window.renderMyList();
+        }
+      } else {
+        const local = JSON.parse(localStorage.getItem("anitrack_v3")||"{}");
+        if(Object.keys(local).length > 0){
+          await setDoc(doc(db,"watchlists",user.uid),{wl:local});
+          window.notif && window.notif("Watchlist backed up to cloud ☁️","#00d4ff");
+        }
+      }
+    });
+
+    window.notif && window.notif(`Welcome, ${displayName}! ☁️ Synced`, "#00ff88");
+    if(window.curTab === "profile" && window.renderProfilePage) window.renderProfilePage();
+    // Show DEV button only for owner
+    const devBtn = document.getElementById("dev-badge-btn");
+    if(devBtn) devBtn.style.display = user.uid === "BP94KVayBFhialbzEXvSv7b5oE03" ? "" : "none";
+
+  } else {
+    // Signed out
+    const btn = document.getElementById("auth-btn");
+    if(btn){ btn.textContent="🔑 Sign In"; btn.style.color="#a855f7"; }
+    document.getElementById("auth-signout").style.display = "none";
+    document.getElementById("auth-avatar-initials").textContent = "🔑";
+    document.getElementById("auth-avatar-initials").style.display = "flex";
+    document.getElementById("auth-avatar-img").style.display = "none";
+    const devBtn = document.getElementById("dev-badge-btn");
+    if(devBtn) devBtn.style.display = "none";
+    document.getElementById("auth-logged-in-bar").style.display = "none";
+    document.getElementById("auth-form-area").style.display = "block";
+    if(firestoreUnsub){ firestoreUnsub(); firestoreUnsub=null; }
+
+    // Fix 7: clear all data on sign out
+    Object.keys(window.WL).forEach(k => delete window.WL[k]);
+    localStorage.removeItem("anitrack_v3");
+    if(window.renderStats)  window.renderStats();
+    if(window.updateMLTab)  window.updateMLTab();
+    if(window.renderMyList) window.renderMyList();
+  }
+});
+
+// ── Sign Up ─────────────────────────────────────────────────
+window.doSignUp = async function(){
+  const name  = document.getElementById("auth-name").value.trim();
+  const email = document.getElementById("auth-email").value.trim();
+  const pass  = document.getElementById("auth-pass").value;
+  const btn   = document.getElementById("auth-submit-btn");
+
+  if(!name)           return window.notif("Please enter your name!", "#ff4466");
+  if(!email)          return window.notif("Please enter your email!", "#ff4466");
+  if(!pass)           return window.notif("Please enter a password!", "#ff4466");
+  if(pass.length < 6) return window.notif("Password must be 6+ characters.", "#ff4466");
+
+  btn.textContent = "Creating account...";
+  btn.disabled = true;
+  try{
+    const cred = await createUserWithEmailAndPassword(auth, email, pass);
+    await updateProfile(cred.user, { displayName: name });
+    document.getElementById("auth-modal").style.display = "none";
+    document.body.style.overflow = "";
+    window.notif(`Account created! Welcome, ${name} 🎌`, "#00ff88");
+  }catch(e){
+    if(e.code==="auth/email-already-in-use"){
+      window.notif("That email is already registered — switching to Sign In.", "#ff6b35");
+      setTimeout(()=>{ window.switchAuthTab && window.switchAuthTab("signin"); }, 800);
+    } else if(e.code==="auth/invalid-email"){
+      window.notif("Invalid email address.", "#ff4466");
+    } else if(e.code==="auth/weak-password"){
+      window.notif("Password is too weak. Use 6+ characters.", "#ff4466");
+    } else {
+      window.notif(e.message.replace("Firebase: ","").replace(/\s*\(.*\)/,""), "#ff4466");
+    }
+  } finally {
+    btn.textContent = "Create Account";
+    btn.disabled = false;
+  }
+};
+
+// ── Sign In ─────────────────────────────────────────────────
+window.doSignIn = async function(){
+  const email = document.getElementById("auth-email").value.trim();
+  const pass  = document.getElementById("auth-pass").value;
+  const btn   = document.getElementById("auth-submit-btn");
+  if(!email || !pass) return window.notif("Enter your email and password!", "#ff4466");
+  btn.textContent = "Signing in...";
+  btn.disabled = true;
+  try{
+    await signInWithEmailAndPassword(auth, email, pass);
+    document.getElementById("auth-modal").style.display = "none";
+    document.body.style.overflow = "";
+  }catch(e){
+    if(e.code==="auth/invalid-credential"||e.code==="auth/wrong-password"||e.code==="auth/user-not-found")
+      window.notif("Wrong email or password. Try again.", "#ff4466");
+    else if(e.code==="auth/invalid-email")
+      window.notif("Invalid email address.", "#ff4466");
+    else if(e.code==="auth/too-many-requests")
+      window.notif("Too many attempts. Wait a moment.", "#ff4466");
+    else
+      window.notif(e.message.replace("Firebase: ","").replace(/\s*\(.*\)/,""), "#ff4466");
+  } finally {
+    // Always re-enable — prevents freeze
+    btn.textContent = "Sign In";
+    btn.disabled = false;
+  }
+};
+
+// ── Sign Out ────────────────────────────────────────────────
+window.doSignOut = async function(){
+  await signOut(auth);
+  // Fix 7: onAuthStateChanged handles clearing — just close modal
+  closeAuthModal();
+  window.notif("Signed out. See you soon! 👋","#ff6b35");
+};
+</script>
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#07070f;font-family:'Nunito',sans-serif;color:#fff;min-height:100vh;padding-bottom:100px;overflow-x:hidden;}
+input,button,textarea,select{font-family:'Nunito',sans-serif;}
+#petals-canvas{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0;}
+.glow1{position:fixed;top:-150px;left:-150px;width:600px;height:600px;background:radial-gradient(circle,rgba(0,212,255,0.07) 0%,transparent 70%);pointer-events:none;z-index:0;}
+.glow2{position:fixed;bottom:-150px;right:-150px;width:600px;height:600px;background:radial-gradient(circle,rgba(255,107,53,0.07) 0%,transparent 70%);pointer-events:none;z-index:0;}
+
+/* HEADER */
+.header{background:linear-gradient(180deg,rgba(7,7,15,0.97) 0%,rgba(7,7,15,0.85) 100%);padding:16px 18px 12px;border-bottom:1px solid rgba(255,255,255,0.06);position:sticky;top:0;z-index:100;backdrop-filter:blur(14px);}
+.header-inner{max-width:960px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;}
+.logo{font-family:'Bebas Neue',sans-serif;font-size:24px;background:linear-gradient(90deg,#00d4ff,#a855f7,#ff6b35);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:2px;line-height:1;}
+.logo-sub{font-size:10px;font-weight:800;background:linear-gradient(90deg,#ffd700,#ff6b35);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:1.5px;}
+.dev-badge{background:linear-gradient(90deg,#a855f722,#00d4ff22);border:1px solid #a855f755;border-radius:8px;padding:5px 10px;font-size:10px;font-weight:800;color:#a855f7;cursor:pointer;}
+
+/* STATS */
+.stats{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;max-width:960px;margin:0 auto;}
+.stat-card{background:rgba(17,17,32,0.8);border-radius:10px;padding:6px 10px;display:flex;align-items:center;gap:5px;border:1px solid var(--color,#ffffff11);}
+.stat-num{font-size:14px;font-weight:900;color:var(--color,#fff);}
+.stat-label{font-size:9px;color:#444;text-transform:capitalize;}
+
+/* TABS */
+.tabs{display:flex;gap:1px;padding:0 12px;border-bottom:1px solid #1a1a2e;margin-bottom:12px;overflow-x:auto;scrollbar-width:none;max-width:960px;margin-left:auto;margin-right:auto;}
+.tabs::-webkit-scrollbar{display:none;}
+.tab{padding:8px 10px;border:none;background:transparent;color:#444;font-weight:700;font-size:11px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all 0.2s;white-space:nowrap;flex-shrink:0;}
+.tab.active{color:#fff;border-bottom-color:#00d4ff;}
+
+/* SEARCH */
+.search-wrap{padding:0 12px 10px;max-width:960px;margin:0 auto;}
+.search-input{width:100%;padding:10px 14px;background:rgba(17,17,32,0.9);border:1px solid #222;border-radius:12px;color:#fff;font-size:13px;outline:none;box-sizing:border-box;}
+.search-input::placeholder{color:#333;}
+.search-input:focus{border-color:#00d4ff44;}
+
+/* CATS */
+.categories{display:flex;gap:6px;overflow-x:auto;padding:0 12px 10px;scrollbar-width:none;max-width:960px;margin:0 auto;}
+.categories::-webkit-scrollbar{display:none;}
+.cat-pill{padding:5px 11px;border-radius:20px;border:1px solid #222;background:rgba(17,17,32,0.8);color:#555;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;transition:all 0.2s;flex-shrink:0;}
+.cat-pill.active{background:linear-gradient(90deg,#00d4ff22,#a855f722);border-color:#00d4ff55;color:#00d4ff;}
+
+/* GRID */
+.grid-wrap{max-width:960px;margin:0 auto;padding:0 12px;}
+.anime-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:9px;}
+.section-label{font-size:12px;font-weight:700;color:#555;padding:4px 12px 8px;max-width:960px;margin:0 auto;}
+.anime-card{background:rgba(17,17,32,0.9);border-radius:13px;overflow:hidden;border:1px solid #1a1a2e;transition:transform 0.2s;position:relative;}
+.anime-card:active{transform:scale(0.97);}
+.anime-card.in-list{border-color:var(--sc,#00d4ff)55;}
+.card-img-wrap{position:relative;padding-top:145%;}
+.card-img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
+.card-no-img{position:absolute;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#1a1a2e,#0d0d1a);display:flex;align-items:center;justify-content:center;font-size:34px;}
+.card-score{position:absolute;top:7px;left:7px;background:rgba(0,0,0,0.85);border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;color:#ffd700;}
+.card-badge{position:absolute;top:7px;right:7px;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:800;color:#000;}
+.card-grad{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,#07070f);padding:28px 8px 8px;}
+.card-body{padding:8px 9px 9px;}
+.card-title{font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px;}
+.card-meta{font-size:10px;color:#444;margin-bottom:6px;line-height:1.4;}
+.status-btns{display:flex;flex-direction:column;gap:3px;margin-bottom:5px;}
+.status-btn{padding:4px 6px;border:none;border-radius:5px;cursor:pointer;font-size:10px;font-weight:700;text-align:left;transition:all 0.15s;text-transform:capitalize;}
+.watch-btn{display:block;width:100%;padding:6px;border:none;border-radius:7px;background:linear-gradient(90deg,#ff6b35,#a855f7);color:#fff;font-weight:800;font-size:10px;cursor:pointer;text-align:center;text-decoration:none;margin-bottom:3px;}
+.watch-btn2{display:block;width:100%;padding:5px;border:1px solid #a855f733;border-radius:7px;background:transparent;color:#a855f7;font-weight:700;font-size:10px;cursor:pointer;text-align:center;text-decoration:none;}
+.synopsis-btn{display:block;width:100%;padding:5px;border:1px solid #00d4ff33;border-radius:7px;background:rgba(0,212,255,0.05);color:#00d4ff;font-weight:700;font-size:10px;cursor:pointer;text-align:center;margin-bottom:3px;transition:all 0.2s;}
+.ep-season-bar{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:5px;}
+.ep-tag{padding:2px 6px;border-radius:5px;background:rgba(168,85,247,0.15);border:1px solid #a855f733;color:#a855f7;font-size:9px;font-weight:800;}
+.season-tag{padding:2px 6px;border-radius:5px;background:rgba(255,107,53,0.15);border:1px solid #ff6b3533;color:#ff6b35;font-size:9px;font-weight:800;}
+.airing-tag{padding:2px 6px;border-radius:5px;background:rgba(0,255,136,0.1);border:1px solid #00ff8833;color:#00ff88;font-size:9px;font-weight:700;}
+.ended-tag{padding:2px 6px;border-radius:5px;background:rgba(80,80,80,0.15);border:1px solid #44444433;color:#666;font-size:9px;font-weight:700;}
+.synopsis-modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.88);z-index:500;padding:16px;overflow-y:auto;backdrop-filter:blur(6px);}
+.synopsis-inner{max-width:520px;margin:10px auto;background:#0d0d1a;border:1px solid #00d4ff44;border-radius:18px;overflow:hidden;}
+.synopsis-header{display:flex;gap:14px;padding:16px;border-bottom:1px solid #1a1a2e;background:rgba(0,212,255,0.03);}
+.synopsis-poster{width:70px;height:100px;object-fit:cover;border-radius:8px;flex-shrink:0;}
+.synopsis-poster-ph{width:70px;height:100px;background:#1a1a2e;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0;}
+.synopsis-title-text{font-size:15px;font-weight:800;color:#fff;margin-bottom:6px;line-height:1.3;}
+.synopsis-tags{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:5px;}
+.synopsis-stag{padding:2px 7px;border-radius:5px;font-size:10px;font-weight:700;}
+.synopsis-score{font-size:12px;color:#ffd700;font-weight:700;margin-top:4px;}
+.synopsis-body{padding:16px;}
+.synopsis-sec{font-size:10px;font-weight:800;color:#00d4ff;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;}
+.synopsis-text{font-size:12px;color:#aaa;line-height:1.7;margin-bottom:14px;}
+.synopsis-details{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;}
+.synopsis-detail{background:#111120;border-radius:8px;padding:8px 10px;border:1px solid #1a1a2e;}
+.synopsis-dlabel{font-size:9px;color:#555;font-weight:700;text-transform:uppercase;margin-bottom:3px;}
+.synopsis-dval{font-size:11px;color:#fff;font-weight:700;line-height:1.4;}
+.synopsis-watch-btn{display:block;width:100%;padding:10px;background:linear-gradient(90deg,#ff6b35,#a855f7);border:none;border-radius:8px;color:#fff;font-weight:800;font-size:12px;cursor:pointer;text-align:center;text-decoration:none;margin-bottom:8px;}
+.synopsis-close-btn{display:block;width:100%;padding:12px;background:rgba(255,255,255,0.03);border:none;border-top:1px solid #1a1a2e;color:#555;font-weight:700;font-size:12px;cursor:pointer;text-align:center;}
+
+/* ===== DAILY UPDATES ===== */
+.updates-wrap{max-width:960px;margin:0 auto;padding:0 18px;}
+.update-hero{background:linear-gradient(135deg,rgba(0,212,255,0.1),rgba(168,85,247,0.1));border:1px solid #00d4ff33;border-radius:16px;padding:16px;margin-bottom:16px;}
+.update-hero-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.update-date{font-size:13px;font-weight:800;color:#00d4ff;}
+.update-refresh{padding:6px 12px;background:rgba(0,212,255,0.1);border:1px solid #00d4ff44;border-radius:8px;color:#00d4ff;font-size:11px;font-weight:700;cursor:pointer;}
+.update-season-badge{display:inline-flex;align-items:center;gap:6px;background:linear-gradient(90deg,#a855f722,#ff6b3522);border:1px solid #a855f744;border-radius:10px;padding:6px 12px;font-size:12px;font-weight:700;color:#a855f7;}
+.day-tabs{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;margin-bottom:14px;}
+.day-tabs::-webkit-scrollbar{display:none;}
+.day-tab{padding:7px 14px;border-radius:10px;border:1px solid #1a1a2e;background:rgba(17,17,32,0.8);color:#444;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0;transition:all 0.2s;}
+.day-tab.active{background:linear-gradient(90deg,#00d4ff22,#a855f722);border-color:#00d4ff55;color:#00d4ff;}
+.day-tab.today{border-color:#00ff8855;color:#00ff88;}
+.day-tab.today.active{background:linear-gradient(90deg,#00ff8822,#00d4ff22);border-color:#00ff8888;color:#00ff88;}
+
+/* Schedule list */
+.schedule-list{display:flex;flex-direction:column;gap:10px;}
+.schedule-item{background:rgba(17,17,32,0.9);border-radius:13px;padding:12px;display:flex;gap:12px;align-items:flex-start;border:1px solid #1a1a2e;transition:border-color 0.2s;}
+.schedule-item.airing-today{border-color:#00ff8844;}
+.schedule-item.airing-today .air-badge{background:#00ff88;color:#000;}
+.sch-img{width:55px;height:78px;object-fit:cover;border-radius:8px;flex-shrink:0;}
+.sch-info{flex:1;min-width:0;}
+.sch-title{font-weight:800;font-size:13px;margin-bottom:4px;line-height:1.3;}
+.sch-meta{font-size:10px;color:#444;margin-bottom:6px;line-height:1.6;}
+.sch-tags{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px;}
+.sch-tag{padding:2px 7px;border-radius:5px;font-size:10px;font-weight:700;}
+.air-badge{padding:3px 8px;border-radius:6px;background:#00d4ff22;border:1px solid #00d4ff44;color:#00d4ff;font-size:10px;font-weight:800;}
+.ep-badge{padding:3px 8px;border-radius:6px;background:#a855f722;border:1px solid #a855f744;color:#a855f7;font-size:10px;font-weight:700;}
+.season-badge-sm{padding:3px 8px;border-radius:6px;background:#ff6b3522;border:1px solid #ff6b3544;color:#ff6b35;font-size:10px;font-weight:700;}
+.score-badge{padding:3px 8px;border-radius:6px;background:rgba(0,0,0,0.4);color:#ffd700;font-size:10px;font-weight:700;}
+.sch-actions{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap;}
+.sch-add-btn{padding:4px 9px;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:700;text-transform:capitalize;}
+.sch-watch-btn{padding:4px 9px;border:none;border-radius:6px;background:linear-gradient(90deg,#ff6b35,#a855f7);color:#fff;font-size:10px;font-weight:700;text-decoration:none;cursor:pointer;}
+
+/* Season overview */
+.season-section{margin-top:20px;}
+.season-title{font-size:14px;font-weight:800;color:#a855f7;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+.season-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;}
+.season-card{background:rgba(17,17,32,0.9);border-radius:12px;overflow:hidden;border:1px solid #1a1a2e;transition:transform 0.2s;}
+.season-card:active{transform:scale(0.97);}
+.season-img-wrap{position:relative;padding-top:140%;}
+.season-img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
+.season-no-img{position:absolute;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#1a1a2e,#0d0d1a);display:flex;align-items:center;justify-content:center;font-size:30px;}
+.season-score{position:absolute;top:6px;left:6px;background:rgba(0,0,0,0.85);border-radius:5px;padding:2px 6px;font-size:10px;font-weight:700;color:#ffd700;}
+.season-ep-tag{position:absolute;top:6px;right:6px;background:rgba(168,85,247,0.9);border-radius:5px;padding:2px 6px;font-size:9px;font-weight:800;color:#fff;}
+.season-grad{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,#07070f);padding:24px 7px 7px;}
+.season-body{padding:7px 8px 9px;}
+.season-name{font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px;}
+.season-info{font-size:10px;color:#444;margin-bottom:6px;line-height:1.4;}
+.season-watch-btn{display:block;width:100%;padding:5px;border:none;border-radius:6px;background:linear-gradient(90deg,#ff6b35,#a855f7);color:#fff;font-weight:800;font-size:10px;text-align:center;text-decoration:none;}
+
+/* MY LIST */
+.list-filters{display:flex;gap:6px;flex-wrap:wrap;padding:0 18px 14px;max-width:960px;margin:0 auto;}
+.filter-btn{padding:6px 10px;border-radius:8px;border:none;cursor:pointer;font-size:11px;font-weight:700;text-transform:capitalize;transition:all 0.2s;}
+.list-items{display:flex;flex-direction:column;gap:10px;padding:0 18px;max-width:960px;margin:0 auto;}
+.list-item{background:rgba(17,17,32,0.9);border-radius:13px;padding:11px;display:flex;gap:10px;border:1px solid #1a1a2e;}
+.list-img{width:50px;height:70px;object-fit:cover;border-radius:7px;flex-shrink:0;}
+.list-info{flex:1;min-width:0;}
+.list-title{font-weight:700;font-size:13px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.list-meta{font-size:10px;color:#444;margin-bottom:5px;line-height:1.5;}
+.ep-row{display:flex;gap:5px;align-items:center;margin-bottom:5px;}
+.ep-btn{background:#1a1a2e;border:none;color:#fff;border-radius:4px;width:22px;height:22px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.ep-input{width:42px;background:#1a1a2e;border:1px solid #222;border-radius:5px;color:#fff;text-align:center;padding:2px;font-size:11px;outline:none;}
+.progress-bar{flex:1;height:3px;background:#1a1a2e;border-radius:2px;overflow:hidden;}
+.progress-fill{height:100%;border-radius:2px;transition:width 0.3s;}
+.stars{display:flex;gap:2px;}
+.star{cursor:pointer;font-size:13px;color:#333;transition:color 0.1s;}
+.star.on{color:#ffd700;}
+.remove-btn{background:transparent;border:1px solid #ff444433;border-radius:7px;color:#ff4444;cursor:pointer;padding:5px 8px;font-size:11px;align-self:flex-start;flex-shrink:0;}
+.watch-btn-sm{display:inline-block;margin-top:6px;padding:5px 11px;border:none;border-radius:7px;background:linear-gradient(90deg,#ff6b35,#a855f7);color:#fff;font-weight:800;font-size:10px;cursor:pointer;text-decoration:none;}
+
+/* AI */
+.ai-wrap{max-width:960px;margin:0 auto;padding:0 18px;}
+.ai-header{background:linear-gradient(135deg,rgba(168,85,247,0.12),rgba(0,212,255,0.08));border:1px solid #a855f733;border-radius:16px;padding:14px;margin-bottom:12px;text-align:center;}
+.ai-title{font-size:18px;font-weight:900;background:linear-gradient(90deg,#a855f7,#00d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.ai-sub{font-size:11px;color:#555;margin-top:3px;}
+.ai-messages{background:rgba(10,10,20,0.8);border:1px solid #1a1a2e;border-radius:14px;padding:12px;min-height:300px;max-height:450px;overflow-y:auto;margin-bottom:10px;display:flex;flex-direction:column;gap:10px;}
+.ai-msg{padding:10px 13px;border-radius:12px;font-size:13px;line-height:1.7;max-width:92%;}
+.ai-msg.user{background:linear-gradient(90deg,#00d4ff22,#a855f722);border:1px solid #00d4ff33;align-self:flex-end;color:#fff;}
+.ai-msg.bot{background:rgba(168,85,247,0.08);border:1px solid #a855f722;align-self:flex-start;color:#ddd;}
+.bot-name{font-size:10px;font-weight:800;color:#a855f7;margin-bottom:4px;}
+.ai-input-row{display:flex;gap:8px;}
+.ai-input{flex:1;padding:11px 13px;background:rgba(17,17,32,0.9);border:1px solid #222;border-radius:10px;color:#fff;font-size:13px;outline:none;}
+.ai-input::placeholder{color:#333;}
+.ai-send{padding:11px 15px;background:linear-gradient(90deg,#a855f7,#00d4ff);border:none;border-radius:10px;color:#fff;font-weight:800;cursor:pointer;font-size:13px;flex-shrink:0;}
+.quick-btns{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+.quick-btn{padding:6px 11px;border-radius:20px;border:1px solid #a855f733;background:rgba(168,85,247,0.08);color:#a855f7;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;}
+
+/* MANGA */
+.manga-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:11px;}
+.manga-card{background:rgba(17,17,32,0.9);border-radius:13px;overflow:hidden;border:1px solid #1a1a2e;transition:transform 0.2s;}
+.manga-card:active{transform:scale(0.97);}
+.manga-img-wrap{position:relative;padding-top:145%;}
+.manga-img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
+.manga-no-img{position:absolute;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#1a0a2e,#0d070f);display:flex;align-items:center;justify-content:center;font-size:34px;}
+.manga-score{position:absolute;top:7px;left:7px;background:rgba(0,0,0,0.85);border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;color:#ffd700;}
+.manga-grad{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,#07070f);padding:28px 8px 8px;}
+.manga-body{padding:8px 9px 9px;}
+.manga-title{font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px;}
+.manga-meta{font-size:10px;color:#444;margin-bottom:6px;line-height:1.4;}
+.read-btn{display:block;width:100%;padding:6px;border:none;border-radius:7px;background:linear-gradient(90deg,#a855f7,#ff6b35);color:#fff;font-weight:800;font-size:10px;cursor:pointer;text-align:center;text-decoration:none;}
+
+/* WATCH HERO */
+.watch-hero{background:linear-gradient(135deg,rgba(0,212,255,0.1),rgba(168,85,247,0.12),rgba(255,107,53,0.08));border:1px solid #00d4ff33;border-radius:18px;padding:18px 16px 14px;margin-bottom:14px;position:relative;overflow:hidden;}
+.watch-hero::before{content:"🎬";position:absolute;right:-10px;top:-10px;font-size:80px;opacity:0.07;pointer-events:none;}
+.watch-hero-title{font-family:'Bebas Neue',sans-serif;font-size:22px;background:linear-gradient(90deg,#00d4ff,#a855f7,#ff6b35);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:1.5px;margin-bottom:3px;}
+.watch-hero-sub{font-size:11px;color:#555;margin-bottom:12px;}
+.watch-search-big{width:100%;padding:13px 16px;background:rgba(7,7,15,0.95);border:1.5px solid #00d4ff44;border-radius:14px;color:#fff;font-size:14px;font-family:'Nunito',sans-serif;outline:none;transition:border-color 0.2s;}
+.watch-search-big:focus{border-color:#00d4ff99;}
+.watch-search-big::placeholder{color:#333;}
+.watch-launch-row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
+.launch-btn{flex:1;min-width:120px;padding:10px 12px;border:none;border-radius:11px;font-family:'Nunito',sans-serif;font-weight:800;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:transform 0.15s,box-shadow 0.15s;text-decoration:none;}
+.launch-btn:active{transform:scale(0.96);}
+.launch-gogo{background:linear-gradient(90deg,#ff6b35,#c24000);color:#fff;box-shadow:0 0 18px rgba(255,107,53,0.2);}
+.launch-crunchyroll{background:linear-gradient(90deg,#f47521,#d45a00);color:#fff;box-shadow:0 0 18px rgba(244,117,33,0.2);}
+.launch-tubi{background:linear-gradient(90deg,#a855f7,#7c22c0);color:#fff;box-shadow:0 0 18px rgba(168,85,247,0.2);}
+
+/* SITE CARDS */
+.watch-sites-title{font-size:12px;font-weight:800;color:#555;letter-spacing:1px;text-transform:uppercase;margin:14px 0 8px;}
+.watch-sites-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;}
+.site-card{background:rgba(17,17,32,0.95);border-radius:13px;border:1px solid #1a1a2e;padding:12px;display:flex;flex-direction:column;gap:5px;transition:border-color 0.2s;cursor:pointer;text-decoration:none;}
+.site-card:active{transform:scale(0.97);}
+.site-card.primary{border-color:#00d4ff33;}
+.site-card.secondary{border-color:#ff6b3533;}
+.site-card.legal{border-color:#00ff8833;}
+.site-card-top{display:flex;align-items:center;justify-content:space-between;}
+.site-card-name{font-weight:900;font-size:13px;}
+.site-card-tag{font-size:9px;font-weight:800;padding:2px 7px;border-radius:5px;}
+.tag-free{background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44;}
+.tag-legal{background:#00ff8822;color:#00ff88;border:1px solid #00ff8844;}
+.tag-backup{background:#ff6b3522;color:#ff6b35;border:1px solid #ff6b3544;}
+.site-card-desc{font-size:10px;color:#444;line-height:1.5;}
+.site-card-go{font-size:10px;font-weight:800;margin-top:3px;}
+
+/* DEV */
+.dev-panel{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.96);z-index:999;overflow-y:auto;padding:20px;}
+.dev-inner{max-width:500px;margin:0 auto;background:#0d0d1a;border:1px solid #a855f755;border-radius:16px;padding:20px;}
+.dev-title{font-size:20px;font-weight:900;background:linear-gradient(90deg,#a855f7,#00d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px;}
+.dev-input{width:100%;padding:11px 14px;background:#111120;border:1px solid #222;border-radius:10px;color:#fff;font-size:13px;outline:none;margin-bottom:10px;}
+.dev-btn{width:100%;padding:12px;background:linear-gradient(90deg,#a855f7,#00d4ff);border:none;border-radius:10px;color:#fff;font-weight:800;font-size:14px;cursor:pointer;margin-bottom:8px;}
+.dev-close{width:100%;padding:10px;background:transparent;border:1px solid #333;border-radius:10px;color:#555;font-weight:700;font-size:13px;cursor:pointer;}
+.dev-stat{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #1a1a2e;font-size:13px;}
+.dev-stat span:last-child{color:#00d4ff;font-weight:700;}
+
+/* AUTH PROMPT */
+.auth-prompt{position:fixed;bottom:0;left:0;right:0;background:#0d0d1a;border-top:1px solid #a855f755;border-radius:20px 20px 0 0;padding:24px 20px;z-index:700;transform:translateY(100%);transition:transform 0.3s ease;backdrop-filter:blur(10px);}
+.auth-prompt.show{transform:translateY(0);}
+.auth-prompt-title{font-size:16px;font-weight:900;color:#fff;margin-bottom:4px;}
+.auth-prompt-sub{font-size:12px;color:#555;margin-bottom:18px;}
+.auth-prompt-btns{display:flex;flex-direction:column;gap:8px;}
+.auth-prompt-signin{padding:13px;background:linear-gradient(90deg,#a855f7,#00d4ff);border:none;border-radius:12px;color:#fff;font-weight:800;font-size:14px;cursor:pointer;font-family:'Nunito',sans-serif;}
+.auth-prompt-create{padding:11px;background:transparent;border:1px solid #a855f744;border-radius:12px;color:#a855f7;font-weight:700;font-size:13px;cursor:pointer;font-family:'Nunito',sans-serif;}
+.auth-prompt-close{padding:9px;background:transparent;border:none;color:#333;font-weight:700;font-size:12px;cursor:pointer;margin-top:2px;font-family:'Nunito',sans-serif;}
+/* SITE PICKER */
+.site-pick-btn{background:#1a1a2e;border:1px solid #222;border-radius:8px;color:#555;font-size:10px;font-weight:700;padding:4px 10px;cursor:pointer;font-family:'Nunito',sans-serif;transition:all 0.2s;}
+.site-pick-btn.active{background:rgba(0,212,255,0.1);border-color:#00d4ff55;color:#00d4ff;}
+
+/* PROFILE PAGE */
+.profile-wrap{max-width:500px;margin:0 auto;padding-bottom:40px;}
+.profile-banner{position:relative;width:100%;height:160px;background:linear-gradient(135deg,#0d0d1a,#1a0a2e,#0a1a2e);overflow:hidden;}
+.profile-banner-overlay{position:absolute;inset:0;background:linear-gradient(to bottom,transparent 50%,#0d0d1a);}
+.profile-banner-edit{position:absolute;top:10px;right:10px;background:rgba(0,0,0,0.5);border:1px solid #ffffff22;border-radius:8px;color:#fff;padding:5px 8px;font-size:12px;cursor:pointer;}
+.profile-avatar-wrap{position:relative;margin:-40px auto 0;width:80px;}
+.profile-avatar{width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,#a855f7,#00d4ff);border:3px solid #0d0d1a;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:900;color:#fff;overflow:hidden;}
+.profile-avatar-edit{position:absolute;bottom:0;right:0;background:#1a1a2e;border:2px solid #0d0d1a;border-radius:50%;width:24px;height:24px;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.profile-name{text-align:center;font-size:20px;font-weight:900;color:#fff;margin:10px 16px 2px;letter-spacing:0.3px;}
+.profile-status{text-align:center;font-size:11px;color:#555;margin-bottom:14px;}
+.profile-action-row{display:flex;gap:8px;justify-content:center;margin:0 16px 16px;}
+.profile-action-btn{flex:1;max-width:140px;padding:9px;background:rgba(255,255,255,0.04);border:1px solid #1a1a2e;border-radius:10px;color:#aaa;font-size:12px;font-weight:700;cursor:pointer;font-family:'Nunito',sans-serif;}
+.profile-stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:0 16px 14px;}
+.profile-stat{background:#111120;border:1px solid #1a1a2e;border-radius:10px;padding:10px 4px;text-align:center;}
+.profile-stat-num{font-size:16px;font-weight:900;}
+.profile-stat-label{font-size:9px;color:#444;margin-top:2px;}
+.profile-info-card{margin:0 16px 14px;background:#111120;border:1px solid #1a1a2e;border-radius:14px;overflow:hidden;}
+.profile-info-row{padding:12px 16px;border-bottom:1px solid #1a1a2e;}
+.profile-info-row:last-child{border-bottom:none;}
+.profile-info-val{font-size:13px;font-weight:700;color:#fff;margin-bottom:2px;}
+.profile-info-label{font-size:10px;color:#444;}
+.profile-section-title{font-size:12px;font-weight:800;color:#555;text-transform:uppercase;letter-spacing:1px;margin:0 16px 8px;}
+.profile-genre-row{display:flex;gap:6px;flex-wrap:wrap;margin:0 16px 20px;}
+.profile-genre-tag{background:rgba(168,85,247,0.1);border:1px solid #a855f733;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:700;color:#a855f7;}
+.profile-signout-btn{display:block;width:calc(100% - 32px);margin:0 16px;padding:12px;background:rgba(255,68,102,0.08);border:1px solid #ff446633;border-radius:12px;color:#ff4466;font-weight:700;font-size:13px;cursor:pointer;font-family:'Nunito',sans-serif;}
+/* Edit sheets */
+.edit-sheet{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:500;display:flex;align-items:flex-end;}
+.edit-sheet-inner{background:#0d0d1a;border:1px solid #a855f733;border-radius:20px 20px 0 0;padding:24px 20px;width:100%;max-height:85vh;overflow-y:auto;}
+.edit-sheet-title{font-size:16px;font-weight:900;color:#fff;margin-bottom:16px;}
+.edit-label{display:block;font-size:11px;font-weight:700;color:#555;margin-bottom:5px;margin-top:10px;}
+/* NOTIFICATION PANEL */
+.notif-panel{position:fixed;top:0;right:0;bottom:0;width:min(320px,100vw);background:#0d0d1a;border-left:1px solid #1a1a2e;z-index:600;transform:translateX(100%);transition:transform 0.3s ease;overflow-y:auto;}
+.notif-panel.open{transform:translateX(0);}
+.notif-panel-header{display:flex;align-items:center;justify-content:space-between;padding:16px;border-bottom:1px solid #1a1a2e;position:sticky;top:0;background:#0d0d1a;}
+.notif-panel-title{font-size:14px;font-weight:900;color:#fff;}
+.notif-item{padding:12px 16px;border-bottom:1px solid #1a1a2e;cursor:pointer;}
+.notif-item:hover{background:rgba(255,255,255,0.02);}
+.notif-item-title{font-size:12px;font-weight:700;color:#fff;margin-bottom:2px;}
+.notif-item-body{font-size:11px;color:#555;line-height:1.4;}
+.notif-item-time{font-size:9px;color:#333;margin-top:3px;}
+.notif-item.unread{border-left:2px solid #00d4ff;}
+/* PLACEHOLDER FOR FIREBASE AUTH */
+/* ===== AUTH MODAL ===== */
+.auth-modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.92);z-index:600;padding:20px;overflow-y:auto;backdrop-filter:blur(8px);}
+.auth-inner{max-width:380px;margin:60px auto;background:#0d0d1a;border:1px solid #a855f755;border-radius:18px;overflow:hidden;}
+.auth-header{padding:20px 20px 0;text-align:center;}
+.auth-logo{font-size:32px;margin-bottom:6px;}
+.auth-title{font-size:18px;font-weight:900;background:linear-gradient(90deg,#a855f7,#00d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.auth-sub{font-size:11px;color:#555;margin-top:4px;margin-bottom:16px;}
+.auth-tabs{display:flex;border-bottom:1px solid #1a1a2e;}
+.auth-tab{flex:1;padding:11px;background:transparent;border:none;color:#555;font-weight:700;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s;}
+.auth-tab.active{color:#a855f7;border-bottom-color:#a855f7;}
+.auth-body{padding:20px;}
+.auth-input{width:100%;padding:12px 14px;background:#111120;border:1px solid #222;border-radius:10px;color:#fff;font-size:13px;outline:none;margin-bottom:10px;font-family:'Nunito',sans-serif;}
+.auth-input:focus{border-color:#a855f755;}
+.auth-submit{width:100%;padding:13px;background:linear-gradient(90deg,#a855f7,#00d4ff);border:none;border-radius:10px;color:#fff;font-weight:800;font-size:14px;cursor:pointer;margin-bottom:8px;font-family:'Nunito',sans-serif;}
+.auth-close{width:100%;padding:10px;background:transparent;border:1px solid #222;border-radius:10px;color:#555;font-weight:700;font-size:13px;cursor:pointer;font-family:'Nunito',sans-serif;}
+.auth-benefit{background:rgba(0,212,255,0.06);border:1px solid #00d4ff22;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#555;line-height:1.8;}
+.auth-benefit span{color:#00d4ff;font-weight:700;}
+/* end auth styles */
+
+/* FOOTER */
+.footer{text-align:center;padding:28px 18px 16px;border-top:1px solid #1a1a2e;margin-top:40px;}
+.footer-logo{font-family:'Bebas Neue',sans-serif;font-size:20px;background:linear-gradient(90deg,#00d4ff,#a855f7,#ff6b35);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:2px;}
+.footer-sub{font-size:10px;font-weight:800;color:#ffd700;letter-spacing:1px;margin-bottom:6px;}
+.footer-mail a{color:#00d4ff;text-decoration:none;font-size:12px;}
+.footer-copy{font-size:10px;color:#333;margin-top:5px;}
+
+/* MISC */
+.section-label{font-size:11px;color:#333;padding:0 18px 10px;max-width:960px;margin:0 auto;}
+.notif{position:fixed;top:16px;right:16px;z-index:9999;border-radius:12px;padding:11px 15px;font-weight:700;font-size:13px;animation:slideIn 0.3s ease;max-width:260px;backdrop-filter:blur(10px);}
+@keyframes slideIn{from{opacity:0;transform:translateX(20px);}to{opacity:1;transform:translateX(0);}}
+.loading-wrap{text-align:center;padding:40px;color:#333;}
+.spin{font-size:30px;animation:spin 1.5s linear infinite;display:inline-block;}
+@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);};}
+.empty{text-align:center;padding:50px 20px;color:#333;}
+.empty-icon{font-size:44px;margin-bottom:10px;}
+.load-more{text-align:center;padding:18px;}
+.load-more-btn{padding:10px 26px;background:linear-gradient(90deg,#00d4ff22,#a855f722);border:1px solid #00d4ff44;border-radius:10px;color:#00d4ff;font-weight:700;cursor:pointer;font-size:13px;}
+input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
+.season-row{display:flex;align-items:center;gap:8px;background:#111120;border:1px solid #1a1a2e;border-radius:10px;padding:9px 12px;}
+.season-row-active{border-color:#00ff8844;background:rgba(0,255,136,0.04);}
+.season-row-current{border-color:#00d4ff44;background:rgba(0,212,255,0.04);}
+.season-row-num{font-size:10px;font-weight:900;color:#a855f7;background:rgba(168,85,247,0.12);border:1px solid #a855f733;border-radius:6px;padding:3px 6px;min-width:28px;text-align:center;flex-shrink:0;}
+.season-row-eps{font-size:12px;font-weight:700;color:#fff;line-height:1.3;}
+.season-row-title{font-size:10px;color:#444;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;}
+.season-row-tag{font-size:10px;color:#555;font-weight:700;flex-shrink:0;}
+</style>
+</head>
+<body>
+<canvas id="petals-canvas"></canvas>
+<div class="glow1"></div><div class="glow2"></div>
+<div id="notif" class="notif" style="display:none;"></div>
+
+
+<!-- SYNOPSIS MODAL -->
+<div class="synopsis-modal" id="synopsis-modal">
+  <div class="synopsis-inner">
+    <div class="synopsis-header">
+      <div id="syn-poster-wrap"></div>
+      <div style="flex:1;min-width:0;">
+        <div class="synopsis-title-text" id="syn-title">Loading...</div>
+        <div class="synopsis-tags" id="syn-tags"></div>
+        <div class="synopsis-score" id="syn-score"></div>
+      </div>
+    </div>
+    <div class="synopsis-body">
+      <div class="synopsis-sec">📺 Seasons & Episodes</div>
+      <div id="syn-seasons" style="margin-bottom:14px;display:flex;flex-direction:column;gap:6px;"></div>
+      <div class="synopsis-sec">ℹ️ Details</div>
+      <div class="synopsis-details" id="syn-details"></div>
+      <div class="synopsis-sec">📖 Synopsis</div>
+      <div class="synopsis-text" id="syn-text">Loading synopsis...</div>
+      <button class="synopsis-watch-btn" id="syn-watch" onclick="guardedWatch(this.dataset.url,'watch')" data-url="#">🔁 Watch Free on Gogoanime</button>
+    </div>
+    <button class="synopsis-close-btn" onclick="closeSynopsis()">← Back</button>
+  </div>
+</div>
+
+<!-- DEV PANEL -->
+<div class="dev-panel" id="dev-panel">
+  <div class="dev-inner">
+    <div class="dev-title">🛡️ Developer Panel</div>
+    <p style="font-size:11px;color:#555;margin-bottom:14px;">AniTrack — Excellent Error Private Access</p>
+    <div id="dev-pass-section">
+      <input class="dev-input" type="password" id="dev-pass" placeholder="Developer password..."/>
+      <button class="dev-btn" onclick="devLogin()">🔑 Access</button>
+    </div>
+    <button class="dev-close" onclick="closeDev()">✕ Close</button>
+    <div id="dev-content" style="display:none;">
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid #1a1a2e;">
+        <div style="font-size:13px;font-weight:700;color:#00d4ff;margin-bottom:10px;">👤 Current User</div>
+        <div id="dv-user-info"></div>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid #1a1a2e;">
+        <div style="font-size:13px;font-weight:700;color:#a855f7;margin-bottom:10px;">📊 Watchlist Stats</div>
+        <div class="dev-stat"><span>Total</span><span id="dv-total">0</span></div>
+        <div class="dev-stat"><span>Watching</span><span id="dv-w">0</span></div>
+        <div class="dev-stat"><span>Completed</span><span id="dv-c">0</span></div>
+        <div class="dev-stat"><span>Plan to Watch</span><span id="dv-p">0</span></div>
+        <div class="dev-stat"><span>Dropped</span><span id="dv-d">0</span></div>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid #1a1a2e;">
+        <div style="font-size:13px;font-weight:700;color:#00ff88;margin-bottom:10px;">⚙️ System</div>
+        <div class="dev-stat"><span>Version</span><span>v4.0.0</span></div>
+        <div class="dev-stat"><span>Preferred Site</span><span id="dv-pref-site">gogo</span></div>
+        <div class="dev-stat"><span>Anime API</span><span>Jikan v4 + AniList</span></div>
+        <div class="dev-stat"><span>Manga API</span><span>MangaDex</span></div>
+        <div class="dev-stat"><span>Auth</span><span style="color:#00ff88">Firebase ✅</span></div>
+        <div class="dev-stat"><span>Firestore</span><span style="color:#00ff88">Active ✅</span></div>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid #1a1a2e;">
+        <button class="dev-btn" style="margin-bottom:8px;" onclick="exportData()">📤 Export Watchlist JSON</button>
+        <button class="dev-btn" style="background:linear-gradient(90deg,#ff446611,#0d0d1a);color:#ff4466;border:1px solid #ff444433;" onclick="clearAll()">🗑️ Clear All Data</button>
+      </div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid #1a1a2e;font-size:11px;color:#333;line-height:1.8;">
+        <strong style="color:#ff4466;">⚠️ AI Key:</strong> Use Firebase Cloud Functions only.<br/>
+        <strong style="color:#00ff88;">AniBot:</strong> Offline KB + optional Claude API.<br/>
+        <strong style="color:#a855f7;">Revenue:</strong> AdSense, Patreon, Premium, Merch.<br/>
+        <strong style="color:#a855f7;">Contact:</strong> excellenterror8@gmail.com
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-inner">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="back-btn" onclick="goBack()" style="display:none;background:rgba(255,255,255,0.06);border:1px solid #ffffff15;border-radius:8px;color:#aaa;padding:6px 10px;font-size:16px;cursor:pointer;line-height:1;">←</button>
+      <div>
+        <div class="logo">⛩ AniTrack</div>
+        <div class="logo-sub">⚡ Excellent Error ⚡</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <!-- Notification bell -->
+      <button id="notif-bell" onclick="openNotifPanel()" style="position:relative;background:rgba(255,255,255,0.04);border:1px solid #1a1a2e;border-radius:8px;padding:6px 8px;cursor:pointer;color:#555;font-size:14px;">
+        🔔<span id="notif-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ff4466;color:#fff;border-radius:50%;width:14px;height:14px;font-size:8px;font-weight:900;display:none;align-items:center;justify-content:center;"></span>
+      </button>
+      <!-- Auth avatar / sign in button -->
+      <div id="auth-avatar" onclick="window._currentUser ? switchTab('profile',event) : openAuthModal()" style="cursor:pointer;width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#a855f7,#00d4ff);border:2px solid #a855f755;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#fff;overflow:hidden;flex-shrink:0;">
+        <span id="auth-avatar-initials">🔑</span>
+        <img id="auth-avatar-img" src="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%;"/>
+      </div>
+      <button id="auth-signout" onclick="window.doSignOut()" style="display:none;background:rgba(255,68,68,0.08);border:1px solid #ff444433;border-radius:8px;padding:4px 8px;font-size:9px;font-weight:800;color:#ff4466;cursor:pointer;">Out</button>
+      <button id="dev-badge-btn" class="dev-badge" onclick="openDev()" style="display:none;">🛡️</button>
+    </div>
+  </div>
+</div>
+
+<!-- NOTIFICATION PANEL -->
+<div class="notif-panel" id="notif-panel">
+  <div class="notif-panel-header">
+    <div class="notif-panel-title">🔔 Notifications</div>
+    <div style="display:flex;gap:8px;">
+      <button onclick="markAllRead()" style="font-size:10px;color:#555;background:none;border:none;cursor:pointer;font-family:'Nunito',sans-serif;">Mark all read</button>
+      <button onclick="closeNotifPanel()" style="color:#555;background:none;border:none;cursor:pointer;font-size:16px;">✕</button>
+    </div>
+  </div>
+  <div id="notif-list"></div>
+</div>
+<div id="notif-overlay" onclick="closeNotifPanel()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:599;"></div>
+
+<!-- AUTH PROMPT — bottom sheet for protected actions -->
+<div class="auth-prompt" id="auth-prompt">
+  <div class="auth-prompt-title" id="auth-prompt-title">🔐 Sign In Required</div>
+  <div class="auth-prompt-sub" id="auth-prompt-sub">Create a free account to access this feature.</div>
+  <div class="auth-prompt-btns">
+    <button class="auth-prompt-signin" onclick="closeAuthPrompt(); openAuthModal(); switchAuthTab('signin')">🔑 Sign In</button>
+    <button class="auth-prompt-create" onclick="closeAuthPrompt(); openAuthModal(); switchAuthTab('signup')">✨ Create Free Account</button>
+    <button class="auth-prompt-close" onclick="closeAuthPrompt()">Maybe later</button>
+  </div>
+</div>
+
+<!-- AUTH MODAL -->
+<div class="auth-modal" id="auth-modal">
+  <div class="auth-inner">
+    <div class="auth-header">
+      <div class="auth-logo">⛩</div>
+      <div class="auth-title">AniTrack Account</div>
+      <div class="auth-sub">Sign in to sync your watchlist across all devices ☁️</div>
+    </div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-signin" onclick="switchAuthTab('signin')">Sign In</button>
+      <button class="auth-tab" id="tab-signup" onclick="switchAuthTab('signup')">Create Account</button>
+    </div>
+    <!-- Logged in state — rebuilt dynamically by onAuthStateChanged -->
+    <div id="auth-logged-in-bar" style="display:none;"></div>
+    <!-- Auth form -->
+    <div class="auth-body" id="auth-form-area">
+      <input class="auth-input" type="text" id="auth-name" placeholder="Your name (for signup)" style="display:none;"/>
+      <input class="auth-input" type="email" id="auth-email" placeholder="Email address"/>
+      <input class="auth-input" type="password" id="auth-pass" placeholder="Password (6+ characters)"/>
+      <button class="auth-submit" id="auth-submit-btn" onclick="authSubmit()">Sign In</button>
+      <button class="auth-close" onclick="closeAuthModal()">✕ Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- END MODALS -->
+
+<div class="stats" id="stats"></div>
+
+<!-- TABS -->
+<div class="tabs">
+  <button class="tab active" data-tab="browse" onclick="switchTab('browse',event)">🔍 Anime</button>
+  <button class="tab" data-tab="updates" onclick="switchTab('updates',event)">📅 Daily Updates</button>
+  <button class="tab" data-tab="watch" onclick="switchTab('watch',event)">🎬 Watch</button>
+  <button class="tab" data-tab="manga" onclick="switchTab('manga',event)">📖 Manga</button>
+  <button class="tab" data-tab="mylist" onclick="switchTab('mylist',event)" id="mylist-tab">📋 My List (0)</button>
+  <button class="tab" data-tab="ai" onclick="switchTab('ai',event)">🤖 AniBot</button>
+  <button class="tab" data-tab="profile" onclick="switchTab('profile',event)">👤 Profile</button>
+</div>
+
+<!-- BROWSE -->
+<div id="tab-browse">
+  <div class="search-wrap"><input class="search-input" id="search-input" placeholder="Search any anime from MyAnimeList..." oninput="onAnimeSearch(this.value)"/></div>
+  <div class="categories" id="anime-cats"></div>
+  <div class="section-label" id="browse-label">🔥 Top Currently Airing Anime</div>
+  <div class="grid-wrap"><div class="anime-grid" id="anime-grid"></div></div>
+  <div class="load-more" id="anime-more" style="display:none;"><button class="load-more-btn" onclick="loadMoreAnime()">Load More ↓</button></div>
+  <div class="loading-wrap" id="anime-load" style="display:none;"><span class="spin">⛩</span><br/><br/>Loading...</div>
+</div>
+
+<!-- DAILY UPDATES -->
+<div id="tab-updates" style="display:none;">
+  <div class="updates-wrap">
+    <!-- Hero -->
+    <div class="update-hero">
+      <div class="update-hero-top">
+        <div>
+          <div class="update-date" id="today-date">📅 Loading...</div>
+          <div style="font-size:11px;color:#555;margin-top:2px;">Anime release schedule — refreshed daily</div>
+        </div>
+        <button class="update-refresh" onclick="refreshSchedule()">🔄 Refresh</button>
+      </div>
+      <div class="update-season-badge" id="current-season-badge">🌸 Loading current season...</div>
+      <!-- Issue 5: Site chooser -->
+      <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <span style="font-size:10px;color:#555;font-weight:700;">Watch via:</span>
+        <button class="site-pick-btn active" id="site-pick-gogo"    onclick="setPrefSite('gogo')">🔁 Gogoanime</button>
+        <button class="site-pick-btn"        id="site-pick-crunchy" onclick="setPrefSite('crunchy')">✅ Crunchyroll</button>
+        <button class="site-pick-btn"        id="site-pick-tubi"    onclick="setPrefSite('tubi')">✅ Tubi</button>
+      </div>
+    </div>
+
+    <!-- Day selector -->
+    <div class="day-tabs" id="day-tabs"></div>
+
+    <!-- Schedule list -->
+    <div class="loading-wrap" id="schedule-load" style="display:none;"><span class="spin">📅</span><br/><br/>Loading schedule...</div>
+    <div class="schedule-list" id="schedule-list"></div>
+
+    <!-- Current season section -->
+    <div class="season-section">
+      <div class="season-title">
+        <span id="season-section-title">🌸 This Season's Anime</span>
+        <span style="font-size:10px;color:#555;font-weight:400;">Updated daily from MyAnimeList</span>
+      </div>
+      <div class="loading-wrap" id="season-load" style="display:none;"><span class="spin">🌸</span><br/><br/>Loading season...</div>
+      <div class="season-grid" id="season-grid"></div>
+      <div class="load-more" id="season-more" style="display:none;"><button class="load-more-btn" onclick="loadMoreSeason()">Load More Season Anime ↓</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- WATCH -->
+<div id="tab-watch" style="display:none;">
+  <div style="max-width:960px;margin:0 auto;padding:0 18px;">
+
+    <!-- HERO -->
+    <div class="watch-hero">
+      <div class="watch-hero-title">⛩ Watch Anime Free</div>
+      <div class="watch-hero-sub">Search any title → instantly open on the best free streaming sites. No sign-up. No stress.</div>
+      <input class="watch-search-big" id="watch-hero-input" placeholder="🔍 Type any anime title to find & watch..." oninput="onWatchHeroSearch(this.value)" onkeydown="if(event.key==='Enter')launchSearch()"/>
+      <div class="watch-launch-row">
+        <a id="btn-gogo" class="launch-btn launch-gogo" href="https://gogoanime.by" target="_blank">🔁 Gogoanime</a>
+        <a id="btn-crunchyroll" class="launch-btn launch-crunchyroll" href="https://crunchyroll.com" target="_blank">✅ Crunchyroll</a>
+        <a id="btn-tubi" class="launch-btn launch-tubi" href="https://tubitv.com/category/anime" target="_blank">✅ Tubi</a>
+      </div>
+    </div>
+
+    <!-- SITE INFO CARDS -->
+    <div class="watch-sites-title">📡 Streaming Sites</div>
+    <div class="watch-sites-grid">
+      <a class="site-card primary" href="https://gogoanime.by" target="_blank">
+        <div class="site-card-top"><div class="site-card-name" style="color:#00d4ff">🔁 Gogoanime</div><span class="site-card-tag tag-free">⭐ BEST</span></div>
+        <div class="site-card-desc">Huge library, HD quality. Use gogoanime.by — beware fake clones.</div>
+        <div class="site-card-go" style="color:#00d4ff">gogoanime.by →</div>
+      </a>
+      <a class="site-card secondary" href="https://hianime.to" target="_blank">
+        <div class="site-card-top"><div class="site-card-name" style="color:#a855f7">🔥 HiAnime</div><span class="site-card-tag tag-free">NO ADS</span></div>
+        <div class="site-card-desc">Clean UI, dubbed + subbed, very fast. One of the best free sites.</div>
+        <div class="site-card-go" style="color:#a855f7">hianime.to →</div>
+      </a>
+      <a class="site-card secondary" href="https://aniwave.to" target="_blank">
+        <div class="site-card-top"><div class="site-card-name" style="color:#ff6b35">⚡ Aniwave</div><span class="site-card-tag tag-free">FREE</span></div>
+        <div class="site-card-desc">Smooth player, massive library, sub & dub options.</div>
+        <div class="site-card-go" style="color:#ff6b35">aniwave.to →</div>
+      </a>
+      <a class="site-card legal" href="https://crunchyroll.com" target="_blank">
+        <div class="site-card-top"><div class="site-card-name" style="color:#ff6b35">✅ Crunchyroll</div><span class="site-card-tag tag-legal">LEGAL</span></div>
+        <div class="site-card-desc">Free with ads. Largest legal library + simulcasts. Official.</div>
+        <div class="site-card-go" style="color:#ff6b35">crunchyroll.com →</div>
+      </a>
+      <a class="site-card legal" href="https://tubitv.com/category/anime" target="_blank">
+        <div class="site-card-top"><div class="site-card-name" style="color:#00ff88">✅ Tubi</div><span class="site-card-tag tag-legal">LEGAL</span></div>
+        <div class="site-card-desc">Free, legal, no sign-up. Naruto, One Piece, Death Note & more.</div>
+        <div class="site-card-go" style="color:#00ff88">tubitv.com →</div>
+      </a>
+      <a class="site-card legal" href="https://www.netflix.com/browse/genre/7424" target="_blank">
+        <div class="site-card-top"><div class="site-card-name" style="color:#e50914">🎬 Netflix</div><span class="site-card-tag tag-legal">PREMIUM</span></div>
+        <div class="site-card-desc">Premium anime originals — Demon Slayer, Jojo, Baki, Attack on Titan.</div>
+        <div class="site-card-go" style="color:#e50914">netflix.com →</div>
+      </a>
+      <a class="site-card legal" href="https://www.bilibili.tv/en/anime" target="_blank">
+        <div class="site-card-top"><div class="site-card-name" style="color:#a855f7">🐉 Bilibili</div><span class="site-card-tag tag-legal">DONGHUA</span></div>
+        <div class="site-card-desc">Official platform for Chinese anime (Donghua). Free tier available.</div>
+        <div class="site-card-go" style="color:#a855f7">bilibili.tv →</div>
+      </a>
+      <a class="site-card secondary" href="https://animesuge.to" target="_blank">
+        <div class="site-card-top"><div class="site-card-name" style="color:#ffd700">🌟 AnimeSuge</div><span class="site-card-tag tag-free">FREE</span></div>
+        <div class="site-card-desc">Fast streaming, auto-next episode, good sub/dub library.</div>
+        <div class="site-card-go" style="color:#ffd700">animesuge.to →</div>
+      </a>
+    </div>
+
+  </div>
+
+  <!-- BROWSE GRID -->
+  <div class="categories" style="max-width:960px;margin:0 auto;" id="watch-cats"></div>
+  <div class="section-label" id="watch-label">🔥 Popular — Tap any anime to watch free instantly</div>
+  <div class="grid-wrap"><div class="anime-grid" id="watch-grid"></div></div>
+  <div class="load-more" id="watch-more" style="display:none;"><button class="load-more-btn" onclick="loadMoreWatch()">Load More ↓</button></div>
+  <div class="loading-wrap" id="watch-load" style="display:none;"><span class="spin">🎬</span><br/><br/>Loading...</div>
+</div>
+
+<!-- MANGA -->
+<div id="tab-manga" style="display:none;">
+  <div class="search-wrap"><input class="search-input" id="manga-input" placeholder="Search manga, manhwa, manhua..." oninput="onMangaSearch(this.value)"/></div>
+  <div class="categories" id="manga-cats"></div>
+  <div class="section-label" id="manga-label">📖 Popular Manga — Updated Daily</div>
+  <div class="grid-wrap"><div class="manga-grid" id="manga-grid"></div></div>
+  <div class="load-more" id="manga-more" style="display:none;"><button class="load-more-btn" onclick="loadMoreManga()">Load More ↓</button></div>
+  <div class="loading-wrap" id="manga-load" style="display:none;"><span class="spin">📖</span><br/><br/>Loading Manga...</div>
+  <div style="text-align:center;padding:14px 12px;font-size:10px;color:#333;">
+    Powered by <a href="https://mangadex.org" target="_blank" style="color:#a855f7;">MangaDex</a> — Read free, legal manga online
+  </div>
+</div>
+
+<!-- MY LIST -->
+<div id="tab-mylist" style="display:none;">
+  <div class="list-filters" id="list-filters"></div>
+  <div class="list-items" id="list-items"></div>
+</div>
+
+<!-- ANIBOT -->
+<div id="tab-ai" style="display:none;">
+  <div class="ai-wrap">
+    <div class="ai-header">
+      <div class="ai-title">🤖 AniBot</div>
+      <div class="ai-sub">Your ultimate anime & manga guide by Excellent Error ⚡</div>
+    </div>
+    <div class="quick-btns">
+      <button class="quick-btn" onclick="quickAsk('Best anime for beginners?')">🌟 For beginners</button>
+      <button class="quick-btn" onclick="quickAsk('Best action anime of all time?')">💥 Best action</button>
+      <button class="quick-btn" onclick="quickAsk('Best romance anime?')">💕 Romance picks</button>
+      <button class="quick-btn" onclick="quickAsk('Tell me about Naruto')">🍥 Naruto</button>
+      <button class="quick-btn" onclick="quickAsk('Tell me about One Piece')">☠️ One Piece</button>
+      <button class="quick-btn" onclick="quickAsk('What is isekai?')">🌀 What is Isekai</button>
+      <button class="quick-btn" onclick="quickAsk('Strongest anime characters?')">⚡ Strongest chars</button>
+      <button class="quick-btn" onclick="quickAsk('Best anime movies?')">🎬 Best movies</button>
+      <button class="quick-btn" onclick="quickAsk('Best manga to read?')">📖 Best manga</button>
+      <button class="quick-btn" onclick="quickAsk('Saddest anime moments?')">😭 Saddest moments</button>
+    </div>
+    <div class="ai-messages" id="ai-messages">
+      <div class="ai-msg bot"><div class="bot-name">🤖 AniBot</div>YO!! 🔥⚡ What's good! I'm AniBot — the ultimate anime & manga AI guide by Excellent Error! I know EVERYTHING about anime, manga, donghua, characters, genres, daily schedules and more! Just ask me anything! 🎌</div>
+    </div>
+    <div class="ai-input-row">
+      <input class="ai-input" id="ai-input" placeholder="Ask anything about anime or manga..." onkeydown="if(event.key==='Enter')sendAI()"/>
+      <button class="ai-send" onclick="sendAI()">Send ⚡</button>
+    </div>
+  </div>
+</div>
+
+<!-- PROFILE -->
+<div id="tab-profile" style="display:none;">
+  <div class="profile-wrap">
+    <!-- Banner -->
+    <div class="profile-banner" id="profile-banner">
+      <div class="profile-banner-overlay"></div>
+      <button class="profile-banner-edit" onclick="triggerBannerUpload()" title="Change banner">🖼️</button>
+      <input type="file" id="banner-upload" accept="image/*" style="display:none" onchange="handleBannerUpload(event)"/>
+    </div>
+    <!-- Avatar -->
+    <div class="profile-avatar-wrap">
+      <div class="profile-avatar" id="profile-avatar-display">
+        <span id="profile-avatar-initials">?</span>
+        <img id="profile-avatar-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%;"/>
+      </div>
+      <button class="profile-avatar-edit" onclick="triggerAvatarUpload()" title="Change photo">📷</button>
+      <input type="file" id="avatar-upload" accept="image/*" style="display:none" onchange="handleAvatarUpload(event)"/>
+    </div>
+    <!-- Name & status -->
+    <div class="profile-name" id="profile-display-name">Loading...</div>
+    <div class="profile-status">🟢 Online • AniTrack member</div>
+    <!-- Action buttons -->
+    <div class="profile-action-row">
+      <button class="profile-action-btn" onclick="openEditInfo()">✏️ Edit Info</button>
+      <button class="profile-action-btn" onclick="openProfileSettings()">⚙️ Settings</button>
+    </div>
+    <!-- Stats -->
+    <div class="profile-stats-row" id="profile-stats-row"></div>
+    <!-- Info card -->
+    <div class="profile-info-card" id="profile-info-card">
+      <div class="profile-info-row" id="pinfo-bio-row" style="display:none;">
+        <div class="profile-info-val" id="pinfo-bio">—</div>
+        <div class="profile-info-label">Bio</div>
+      </div>
+      <div class="profile-info-row">
+        <div class="profile-info-val" id="pinfo-email">—</div>
+        <div class="profile-info-label">Email</div>
+      </div>
+      <div class="profile-info-row">
+        <div class="profile-info-val" id="pinfo-joined">—</div>
+        <div class="profile-info-label">Member since</div>
+      </div>
+    </div>
+    <!-- Favourite genres -->
+    <div class="profile-section-title">📊 My Anime Stats</div>
+    <div class="profile-genre-row" id="profile-genre-row"></div>
+    <!-- Sign out -->
+    <button class="profile-signout-btn" onclick="window.doSignOut()">Sign Out</button>
+  </div>
+
+  <!-- Edit Info Sheet -->
+  <div class="edit-sheet" id="edit-info-sheet" style="display:none;">
+    <div class="edit-sheet-inner">
+      <div class="edit-sheet-title">✏️ Edit Info</div>
+      <label class="edit-label">Display Name</label>
+      <input class="auth-input" id="edit-display-name" type="text" placeholder="Your display name" maxlength="30"/>
+      <label class="edit-label">Bio <span style="color:#444;font-size:10px;">(max 100 chars)</span></label>
+      <textarea class="auth-input" id="edit-bio" placeholder="Tell people about yourself..." maxlength="100" style="resize:none;height:70px;"></textarea>
+      <button class="auth-submit" onclick="saveEditInfo()">💾 Save Changes</button>
+      <button class="auth-close" onclick="closeEditInfo()">✕ Cancel</button>
+    </div>
+  </div>
+
+  <!-- Settings Sheet -->
+  <div class="edit-sheet" id="profile-settings-sheet" style="display:none;">
+    <div class="edit-sheet-inner">
+      <div class="edit-sheet-title">⚙️ Account Settings</div>
+      <label class="edit-label">New Password</label>
+      <input class="auth-input" id="new-password" type="password" placeholder="Enter new password (6+ chars)"/>
+      <label class="edit-label">Confirm Password</label>
+      <input class="auth-input" id="confirm-password" type="password" placeholder="Confirm new password"/>
+      <button class="auth-submit" onclick="changePassword()">🔒 Change Password</button>
+      <div style="height:1px;background:#1a1a2e;margin:12px 0;"></div>
+      <label class="edit-label">New Email Address</label>
+      <input class="auth-input" id="new-email" type="email" placeholder="New email address"/>
+      <label class="edit-label">Current Password <span style="color:#444;font-size:10px;">(required)</span></label>
+      <input class="auth-input" id="current-password-email" type="password" placeholder="Your current password"/>
+      <button class="auth-submit" style="background:linear-gradient(90deg,#ff6b35,#a855f7);" onclick="changeEmail()">📧 Change Email</button>
+      <button class="auth-close" onclick="closeProfileSettings()">✕ Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<div class="footer">
+  <div class="footer-logo">⛩ AniTrack</div>
+  <div class="footer-sub">⚡ EXCELLENT ERROR ⚡</div>
+  <div class="footer-mail"><a href="mailto:excellenterror8@gmail.com">excellenterror8@gmail.com</a></div>
+  <div class="footer-copy">© 2026 AniTrack by Excellent Error. All rights reserved.<br/>Anime: MyAnimeList API • Manga: MangaDex • Watch: Gogoanime / Crunchyroll / Tubi • Updated daily.</div>
+</div>
+
+<script>
+// ===== PETALS =====
+const canvas=document.getElementById('petals-canvas'),ctx=canvas.getContext('2d');
+function rsz(){canvas.width=window.innerWidth;canvas.height=window.innerHeight;}rsz();window.addEventListener('resize',rsz);
+const petals=[];
+function mkP(ry){return{x:Math.random()*canvas.width,y:ry!=null?Math.random()*canvas.height:-20,sz:Math.random()*7+3,sx:Math.random()*1.2-0.6,sy:Math.random()*0.7+0.25,rot:Math.random()*360,rs:Math.random()*1.2-0.6,op:Math.random()*0.45+0.15,col:Math.random()>0.5?'#ff9bb3':'#ffb3c6',wv:Math.random()*Math.PI*2,ws:Math.random()*0.018+0.008};}
+for(let i=0;i<40;i++)petals.push(mkP(true));
+function drawP(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  petals.forEach((p,i)=>{
+    p.y+=p.sy;p.wv+=p.ws;p.x+=p.sx+Math.sin(p.wv)*0.4;p.rot+=p.rs;
+    if(p.y>canvas.height+20||p.x<-30||p.x>canvas.width+30)petals[i]=mkP(null);
+    ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.rot*Math.PI/180);ctx.globalAlpha=p.op;ctx.fillStyle=p.col;ctx.beginPath();ctx.ellipse(0,0,p.sz,p.sz*0.55,0,0,Math.PI*2);ctx.fill();ctx.restore();
+  });requestAnimationFrame(drawP);
+}drawP();
+
+// ===== CONSTANTS =====
+const SC={watching:"#00d4ff",completed:"#00ff88","plan to watch":"#ff6b35",dropped:"#ff4466"};
+const SI={watching:"▶",completed:"✓","plan to watch":"📌",dropped:"✕"};
+const DAYS=["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+const DAY_LABELS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const DAY_EMOJIS=["🌟","🔥","💥","⚡","🎯","🎌","🌸"];
+const SEASONS={1:"Winter ❄️",2:"Winter ❄️",3:"Spring 🌸",4:"Spring 🌸",5:"Spring 🌸",6:"Summer ☀️",7:"Summer ☀️",8:"Summer ☀️",9:"Fall 🍂",10:"Fall 🍂",11:"Fall 🍂",12:"Winter ❄️"};
+const SEASON_KEYS={1:"winter",2:"winter",3:"spring",4:"spring",5:"spring",6:"summer",7:"summer",8:"summer",9:"fall",10:"fall",11:"fall",12:"winter"};
+
+const ACATS=[
+  {l:"🔥 Airing",u:"https://api.jikan.moe/v4/top/anime?limit=24&filter=airing"},
+  {l:"⭐ Top Rated",u:"https://api.jikan.moe/v4/top/anime?limit=24&filter=bypopularity"},
+  {l:"🎬 Movies",u:"https://api.jikan.moe/v4/top/anime?limit=24&type=movie"},
+  {l:"💥 Action",u:"https://api.jikan.moe/v4/anime?limit=24&genres=1&order_by=score&sort=desc"},
+  {l:"😂 Comedy",u:"https://api.jikan.moe/v4/anime?limit=24&genres=4&order_by=score&sort=desc"},
+  {l:"💕 Romance",u:"https://api.jikan.moe/v4/anime?limit=24&genres=22&order_by=score&sort=desc"},
+  {l:"👻 Horror",u:"https://api.jikan.moe/v4/anime?limit=24&genres=14&order_by=score&sort=desc"},
+  {l:"🧙 Fantasy",u:"https://api.jikan.moe/v4/anime?limit=24&genres=10&order_by=score&sort=desc"},
+  {l:"🤖 Sci-Fi",u:"https://api.jikan.moe/v4/anime?limit=24&genres=24&order_by=score&sort=desc"},
+  {l:"⚔️ Shounen",u:"https://api.jikan.moe/v4/anime?limit=24&genres=27&order_by=score&sort=desc"},
+  {l:"🐉 Donghua",u:"https://api.jikan.moe/v4/anime?limit=24&type=ona&order_by=score&sort=desc"},
+];
+const MCATS=[
+  {l:"🔥 Popular",t:""},
+  {l:"💥 Action",t:"391b0423-d847-456f-aff0-8b0cfc03066b"},
+  {l:"💕 Romance",t:"423e2eae-a3a1-3400-a5c6-e3c6b1a51a42"},
+  {l:"🧙 Fantasy",t:"cdc58593-87dd-415e-bbc0-2ec27bf404cc"},
+  {l:"😂 Comedy",t:"4d32cc48-9f00-4cca-9b5a-a56072deceea"},
+  {l:"👻 Horror",t:"cdad7e68-1419-41dd-bdce-27753074a640"},
+  {l:"⚡ Manhwa",t:""},
+];
+
+// ===== STATE =====
+let WL = JSON.parse(localStorage.getItem("anitrack_v3") || "{}");
+let curTab = "browse", filterS = "all";
+
+const browse  = { cat:0, results:[], page:1, query:"", timer:null, hasMore:false };
+const watch   = { cat:0, results:[], page:1, query:"", timer:null, hasMore:false };
+const manga   = { cat:0, results:[], offset:0, query:"", timer:null, hasMore:false };
+const updates = { results:[], page:1, hasMore:false };
+
+let activeDay     = new Date().getDay();
+let scheduleData  = {};
+let seasonRes     = [];
+let seasonPage    = 1;
+let seasonMore    = false;
+let updatesInited = false;
+
+function saveWL(){
+  localStorage.setItem("anitrack_v3", JSON.stringify(WL));
+  if(window._saveToFirestore) window._saveToFirestore(WL);
+}
+function notif(msg, color){
+  const n = document.getElementById("notif");
+  n.textContent = "✨ " + msg;
+  n.style.cssText = `display:block;background:rgba(13,13,26,0.95);border:1px solid ${color};color:${color};box-shadow:0 0 20px ${color}44`;
+  clearTimeout(n._t);
+  n._t = setTimeout(() => n.style.display = "none", 2500);
+}
+function wUrl1(t){ return `https://gogoanime.by/search/?keyword=${encodeURIComponent(t)}`; }
+function wUrl2(t){ return `https://www.crunchyroll.com/search?q=${encodeURIComponent(t)}`; }
+function wUrl3(t){ return `https://tubitv.com/search/${encodeURIComponent(t)}`; }
+function escHtml(s){
+  const d = document.createElement("div");
+  d.appendChild(document.createTextNode(String(s)));
+  return d.innerHTML;
+}
+
+// ===== WATCHLIST — single unified save function =====
+function saveToWatchlist(anime, status){
+  const id = anime.mal_id;
+  const isNew = !WL[id];
+  WL[id] = {
+    ...anime,
+    status,
+    myRating:        WL[id]?.myRating        || 0,
+    episodesWatched: WL[id]?.episodesWatched || 0
+  };
+  saveWL();
+  notif(`"${escHtml(anime.title_english || anime.title)}" → ${status}`, SC[status]);
+  // Push notification
+  if(isNew) pushNotif(`Added to ${status}`, `"${anime.title_english||anime.title}" added to your ${status} list.`, "success");
+  else pushNotif(`List updated`, `"${anime.title_english||anime.title}" moved to ${status}.`, "info");
+  renderStats();
+  updateMLTab();
+}
+
+// ===== TABS =====
+let tabHistory = ["browse"];
+function switchTab(t, e, addToHistory = true){
+  if(addToHistory && t !== curTab) tabHistory.push(t);
+  curTab = t;
+  window.curTab = t;
+  document.querySelectorAll(".tab").forEach(x => {
+    x.classList.toggle("active", x.dataset.tab === t);
+  });
+  ["browse","updates","watch","manga","mylist","ai","profile"].forEach(x => {
+    document.getElementById("tab-" + x).style.display = x === t ? "" : "none";
+  });
+  // Guard protected tabs
+  if(t === "ai"      && !authGuard("ai"))        { switchTab("browse",null,false); return; }
+  if(t === "manga"   && !authGuard("manga-tab")) { switchTab("browse",null,false); return; }
+  if(t === "watch"   && !authGuard("watch-tab")) { switchTab("browse",null,false); return; }
+  if(t === "mylist"  && !authGuard("mylist"))    { switchTab("browse",null,false); return; }
+  if(t === "profile" && !authGuard("mylist"))    { switchTab("browse",null,false); return; }
+  if(t === "watch"   && watch.results.length === 0) initWatch();
+  if(t === "manga"   && manga.results.length === 0) initManga();
+  if(t === "mylist")  renderMyList();
+  if(t === "profile") renderProfilePage();
+  if(t === "updates" && !updatesInited){ updatesInited = true; initUpdates(); }
+  document.getElementById("back-btn").style.display = tabHistory.length > 1 ? "" : "none";
+}
+function goBack(){
+  if(tabHistory.length <= 1) return;
+  tabHistory.pop();
+  switchTab(tabHistory[tabHistory.length - 1], null, false);
+}
+
+// ===== SITE PREFERENCE (Issue 5) =====
+function setPrefSite(site){
+  localStorage.setItem("pref_watch_site", site);
+  document.querySelectorAll(".site-pick-btn").forEach(b => b.classList.remove("active"));
+  document.getElementById(`site-pick-${site}`)?.classList.add("active");
+  // Re-render schedule with new site
+  const day = DAYS[activeDay];
+  if(scheduleData[day]) renderSchedule(scheduleData[day], day);
+  notif(`Watch site set to ${site==="crunchy"?"Crunchyroll":site==="tubi"?"Tubi":"Gogoanime"} 🔁`, "#00d4ff");
+}
+
+// ===== PROFILE PAGE (Issue 3 & 4) =====
+function renderProfilePage(){
+  const user = window._currentUser;
+  if(!user) return;
+  const name = (user.displayName && user.displayName.trim()) ? user.displayName.trim() : "User";
+  const initials = name.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
+
+  // Avatar
+  document.getElementById("profile-avatar-initials").textContent = initials;
+  const savedAvatar = localStorage.getItem("anitrack_avatar");
+  const avatarImg = document.getElementById("profile-avatar-img");
+  if(savedAvatar){ avatarImg.src=savedAvatar; avatarImg.style.display="block"; document.getElementById("profile-avatar-initials").style.display="none"; }
+  else { avatarImg.style.display="none"; document.getElementById("profile-avatar-initials").style.display="flex"; }
+
+  // Banner
+  const savedBanner = localStorage.getItem("anitrack_banner");
+  const banner = document.getElementById("profile-banner");
+  if(savedBanner) banner.style.backgroundImage = `url(${savedBanner})`;
+
+  // Name & info
+  document.getElementById("profile-display-name").textContent = name;
+  document.getElementById("pinfo-email").textContent = user.email;
+  const joined = user.metadata?.creationTime ? new Date(user.metadata.creationTime).toLocaleDateString("en-US",{year:"numeric",month:"long"}) : "—";
+  document.getElementById("pinfo-joined").textContent = joined;
+
+  // Bio
+  const bio = localStorage.getItem("anitrack_bio_"+user.uid) || "";
+  const bioRow = document.getElementById("pinfo-bio-row");
+  if(bio){ document.getElementById("pinfo-bio").textContent = bio; bioRow.style.display="block"; }
+  else bioRow.style.display = "none";
+
+  // Stats
+  const wl = window.WL || {};
+  const watching   = Object.values(wl).filter(a=>a.status==="Watching").length;
+  const completed  = Object.values(wl).filter(a=>a.status==="Completed").length;
+  const planTo     = Object.values(wl).filter(a=>a.status==="Plan to Watch").length;
+  const dropped    = Object.values(wl).filter(a=>a.status==="Dropped").length;
+  const totalEps   = Object.values(wl).reduce((s,a)=>s+(a.episodesWatched||0),0);
+  document.getElementById("profile-stats-row").innerHTML = [
+    ["▶️", watching,  "Watching",  "#00d4ff"],
+    ["✅", completed, "Completed", "#00ff88"],
+    ["📌", planTo,    "Plan",      "#ff6b35"],
+    ["📺", totalEps,  "Eps Watched","#a855f7"],
+  ].map(([ic,n,l,c])=>`
+    <div class="profile-stat">
+      <div class="profile-stat-num" style="color:${c};">${n}</div>
+      <div class="profile-stat-label">${l}</div>
+    </div>`).join("");
+
+  // Top genres
+  const genreCounts = {};
+  Object.values(wl).forEach(a => {
+    (a.genres||[]).forEach(g => { genreCounts[g.name]=(genreCounts[g.name]||0)+1; });
+  });
+  const topGenres = Object.entries(genreCounts).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([g])=>g);
+  document.getElementById("profile-genre-row").innerHTML = topGenres.length
+    ? topGenres.map(g=>`<span class="profile-genre-tag">${escHtml(g)}</span>`).join("")
+    : `<span style="font-size:11px;color:#333;">Add anime to your list to see your top genres</span>`;
+}
+
+function triggerAvatarUpload(){ document.getElementById("avatar-upload").click(); }
+function triggerBannerUpload(){ document.getElementById("banner-upload").click(); }
+
+function handleAvatarUpload(e){
+  const file = e.target.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    localStorage.setItem("anitrack_avatar", ev.target.result);
+    renderProfilePage();
+    notif("Profile photo updated! 📷","#00ff88");
+  };
+  reader.readAsDataURL(file);
+}
+
+function handleBannerUpload(e){
+  const file = e.target.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    localStorage.setItem("anitrack_banner", ev.target.result);
+    renderProfilePage();
+    notif("Banner updated! 🖼️","#00ff88");
+  };
+  reader.readAsDataURL(file);
+}
+
+function openEditInfo(){
+  const user = window._currentUser; if(!user) return;
+  const name = (user.displayName && user.displayName.trim()) ? user.displayName.trim() : "";
+  document.getElementById("edit-display-name").value = name;
+  document.getElementById("edit-bio").value = localStorage.getItem("anitrack_bio_"+user.uid) || "";
+  document.getElementById("edit-info-sheet").style.display = "flex";
+}
+function closeEditInfo(){ document.getElementById("edit-info-sheet").style.display = "none"; }
+
+async function saveEditInfo(){
+  const user = window._currentUser; if(!user) return;
+  const name = document.getElementById("edit-display-name").value.trim();
+  const bio  = document.getElementById("edit-bio").value.trim();
+  if(!name) return notif("Display name can't be empty!", "#ff4466");
+  if(name.length > 30) return notif("Name too long (max 30 chars)", "#ff4466");
+  try{
+    const { updateProfile } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+    await updateProfile(user, { displayName: name });
+    if(bio) localStorage.setItem("anitrack_bio_"+user.uid, bio);
+    else localStorage.removeItem("anitrack_bio_"+user.uid);
+    closeEditInfo();
+    renderProfilePage();
+    // Update header
+    const btn = document.getElementById("auth-btn");
+    if(btn){ btn.textContent=`👤 ${name}`; btn.style.color="#00ff88"; }
+    notif(`Profile updated! Welcome, ${escHtml(name)} ✨`, "#00ff88");
+  }catch(e){ notif(e.message.replace("Firebase: ","").replace(/\s*\(.*\)/,""), "#ff4466"); }
+}
+
+function openProfileSettings(){ document.getElementById("profile-settings-sheet").style.display = "flex"; }
+function closeProfileSettings(){ document.getElementById("profile-settings-sheet").style.display = "none"; }
+
+async function changePassword(){
+  const newPass  = document.getElementById("new-password").value;
+  const confPass = document.getElementById("confirm-password").value;
+  if(!newPass) return notif("Enter a new password", "#ff4466");
+  if(newPass.length < 6) return notif("Password must be 6+ characters", "#ff4466");
+  if(newPass !== confPass) return notif("Passwords don't match!", "#ff4466");
+  try{
+    const { updatePassword } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+    await updatePassword(window._currentUser, newPass);
+    document.getElementById("new-password").value = "";
+    document.getElementById("confirm-password").value = "";
+    notif("Password changed successfully! 🔒", "#00ff88");
+  }catch(e){
+    if(e.code==="auth/requires-recent-login")
+      notif("Please sign out and sign back in, then try again.", "#ff4466");
+    else notif(e.message.replace("Firebase: ","").replace(/\s*\(.*\)/,""), "#ff4466");
+  }
+}
+
+async function changeEmail(){
+  const newEmail   = document.getElementById("new-email").value.trim();
+  const currPass   = document.getElementById("current-password-email").value;
+  if(!newEmail)  return notif("Enter a new email address", "#ff4466");
+  if(!currPass)  return notif("Enter your current password to confirm", "#ff4466");
+  try{
+    const { reauthenticateWithCredential, EmailAuthProvider, updateEmail } =
+      await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+    const cred = EmailAuthProvider.credential(window._currentUser.email, currPass);
+    await reauthenticateWithCredential(window._currentUser, cred);
+    await updateEmail(window._currentUser, newEmail);
+    document.getElementById("new-email").value = "";
+    document.getElementById("current-password-email").value = "";
+    notif("Email updated successfully! 📧", "#00ff88");
+    renderProfilePage();
+  }catch(e){
+    if(e.code==="auth/wrong-password") notif("Wrong password. Try again.", "#ff4466");
+    else notif(e.message.replace("Firebase: ","").replace(/\s*\(.*\)/,""), "#ff4466");
+  }
+}
+
+// ===== DAILY UPDATES =====
+function getCurrentSeason(){
+  const now=new Date();
+  const m=now.getMonth()+1;
+  const y=now.getFullYear();
+  return{season:SEASON_KEYS[m],year:y,label:SEASONS[m],month:m};
+}
+
+function initUpdates(){
+  const now=new Date();
+  // Set today's date
+  document.getElementById("today-date").textContent=`📅 ${now.toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}`;
+  // Set season badge
+  const s=getCurrentSeason();
+  document.getElementById("current-season-badge").textContent=`${s.label} ${s.year} Season`;
+  document.getElementById("season-section-title").textContent=`${s.label} ${s.year} Anime`;
+  // Build day tabs
+  buildDayTabs();
+  // Load today's schedule
+  loadSchedule(DAYS[activeDay]);
+  // Load current season
+  loadCurrentSeason(s.season,s.year,1);
+}
+
+function buildDayTabs(){
+  const today=new Date().getDay();
+  document.getElementById("day-tabs").innerHTML=DAYS.map((d,i)=>{
+    const isToday=i===today;
+    const isActive=i===activeDay;
+    return`<button class="day-tab${isActive?" active":""}${isToday?" today":""}" onclick="selectDay(${i})">
+      ${DAY_EMOJIS[i]} ${DAY_LABELS[i]}${isToday?" (Today)":""}
+    </button>`;
+  }).join("");
+}
+
+function selectDay(i){
+  activeDay=i;
+  buildDayTabs();
+  loadSchedule(DAYS[i]);
+}
+
+async function loadSchedule(day){
+  document.getElementById("schedule-load").style.display="block";
+  document.getElementById("schedule-list").innerHTML="";
+  try{
+    // Check cache first
+    if(scheduleData[day]){
+      renderSchedule(scheduleData[day],day);
+      document.getElementById("schedule-load").style.display="none";
+      return;
+    }
+    const r=await fetch(`https://api.jikan.moe/v4/schedules?filter=${day}&limit=25`);
+    const d=await r.json();
+    const items=d.data||[];
+    scheduleData[day]=items;
+    renderSchedule(items,day);
+  }catch(e){
+    document.getElementById("schedule-list").innerHTML=`<div class="empty"><div class="empty-icon">📅</div>Schedule loads when hosted online!<br/><a href="https://myanimelist.net/anime/season" target="_blank" style="color:#00d4ff;font-size:12px;margin-top:8px;display:block;">View on MyAnimeList →</a></div>`;
+  }
+  document.getElementById("schedule-load").style.display="none";
+}
+
+function renderSchedule(items,day){
+  const today   = DAYS[new Date().getDay()];
+  const isToday = day === today;
+  const wrap    = document.getElementById("schedule-list");
+  if(!items.length){
+    wrap.innerHTML = `<div class="empty"><div class="empty-icon">😴</div>No releases scheduled for ${day.charAt(0).toUpperCase()+day.slice(1)}</div>`;
+    return;
+  }
+  // Get user's preferred watch site (default gogoanime)
+  const prefSite = localStorage.getItem("pref_watch_site") || "gogo";
+  wrap.innerHTML = items.map(a => {
+    const id        = a.mal_id;
+    const inL       = WL[id];
+    const title     = escHtml(a.title_english || a.title || "Unknown");
+    const rawTitle  = a.title_english || a.title || "Unknown";
+    const img       = a.images?.jpg?.image_url || "";
+    const eps       = a.episodes;
+    const score     = a.score;
+    const genres    = escHtml((a.genres||[]).slice(0,2).map(g=>g.name).join(", "));
+    const season    = a.season ? escHtml(`${a.season.charAt(0).toUpperCase()+a.season.slice(1)} ${a.year||""}`) : "";
+    const status    = escHtml(a.status || "");
+    const broadcast = escHtml(a.broadcast?.string || "");
+    const studios   = escHtml((a.studios||[]).map(s=>s.name).join(", "));
+    // Issue 7: show season label clearly
+    const seasonNum = a.season ? escHtml(a.season.charAt(0).toUpperCase()+a.season.slice(1)) : "";
+    const seasonYear = a.year || "";
+    const watchUrl  = prefSite==="crunchy" ? wUrl2(rawTitle) : prefSite==="tubi" ? wUrl3(rawTitle) : wUrl1(rawTitle);
+    const siteName  = prefSite==="crunchy" ? "✅ Crunchyroll" : prefSite==="tubi" ? "✅ Tubi" : "🔁 Gogoanime";
+    return `<div class="schedule-item${isToday?" airing-today":""}">
+      ${img
+        ? `<img class="sch-img" src="${img}" alt="${title}" onerror="this.style.background='#1a1a2e'"/>`
+        : `<div class="sch-img" style="background:#1a1a2e;display:flex;align-items:center;justify-content:center;border-radius:8px">⛩</div>`}
+      <div class="sch-info">
+        <div class="sch-title">${title}</div>
+        <div class="sch-meta">
+          ${studios   ? `🎬 ${studios}<br/>` : ""}
+          ${genres    ? `🎭 ${genres}<br/>`  : ""}
+          ${broadcast ? `⏰ ${broadcast}<br/>` : ""}
+          ${status    ? `📺 ${status}` : ""}
+        </div>
+        <div class="sch-tags">
+          ${isToday ? `<span class="air-badge">🔴 Airing Today</span>` : `<span class="air-badge">📅 ${escHtml(day.charAt(0).toUpperCase()+day.slice(1))}s</span>`}
+          ${seasonNum ? `<span class="season-badge-sm">🌸 ${seasonNum} ${seasonYear}</span>` : ""}
+          ${eps ? `<span class="ep-badge">📺 ${eps} eps total</span>` : `<span class="ep-badge">📺 Ongoing</span>`}
+          ${score ? `<span class="score-badge">★ ${score}</span>` : ""}
+        </div>
+        <div class="sch-actions">
+          ${Object.keys(SC).map(s =>
+            `<button class="sch-add-btn" onclick="addToListFromSchedule(${id},this,'${s}')" data-status="${s}"
+              style="background:${inL?.status===s ? SC[s] : "#1a1a2e"};color:${inL?.status===s ? "#000" : "#555"}">
+              ${SI[s]} ${s}
+            </button>`).join("")}
+          <button class="sch-watch-btn" onclick="guardedWatch('${watchUrl}','watch')">${siteName}</button>
+          <button class="synopsis-btn" style="margin-top:4px;font-size:10px;padding:5px 8px;" onclick="openSynopsis(${id})">📖 Details</button>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+
+async function loadCurrentSeason(season, year, page){
+  document.getElementById("season-load").style.display = "block";
+  try{
+    const r = await fetch(`https://api.jikan.moe/v4/seasons/${year}/${season}?limit=24&page=${page}`);
+    const d = await r.json();
+    const items = d.data || [];
+    if(page===1) seasonRes = items; else seasonRes = [...seasonRes,...items];
+    seasonPage  = page;
+    seasonMore  = d.pagination?.has_next_page || false;
+    document.getElementById("season-more").style.display = seasonMore ? "" : "none";
+    renderSeasonGrid();
+  }catch(e){
+    document.getElementById("season-grid").innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="empty-icon">🌸</div>Season data loads when hosted online!</div>`;
+  }
+  document.getElementById("season-load").style.display = "none";
+}
+function loadMoreSeason(){ const s=getCurrentSeason(); loadCurrentSeason(s.season,s.year,seasonPage+1); }
+
+function renderSeasonGrid(){
+  const g = document.getElementById("season-grid");
+  if(!seasonRes.length){ g.innerHTML=`<div class="empty" style="grid-column:1/-1"><div class="empty-icon">🌸</div>No season data</div>`; return; }
+  g.innerHTML = seasonRes.map(a => {
+    const id       = a.mal_id;
+    const inL      = WL[id];
+    const img      = a.images?.jpg?.large_image_url || a.images?.jpg?.image_url || "";
+    const title    = escHtml(a.title_english || a.title || "Unknown");
+    const rawTitle = a.title_english || a.title || "Unknown";
+    const score    = a.score;
+    const eps      = a.episodes;
+    const status   = escHtml(a.status || "");
+    const isAiring = a.status === "Currently Airing";
+    const genres   = escHtml((a.genres||[]).slice(0,2).map(g=>g.name).join(", "));
+    const broadcast = escHtml(a.broadcast?.string || "");
+    return `<div class="season-card${inL?" in-list":""}">
+      <div class="season-img-wrap">
+        ${img
+          ? `<img class="season-img" src="${img}" alt="${title}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"/>
+             <div class="season-no-img" style="display:none">⛩</div>`
+          : `<div class="season-no-img">⛩</div>`}
+        ${score ? `<div class="season-score">★ ${score}</div>` : ""}
+        <div class="season-ep-tag">${eps ? `EP ${eps}` : "Ongoing"}</div>
+        <div class="season-grad"></div>
+      </div>
+      <div class="season-body">
+        <div class="season-name" title="${title}">${title}</div>
+        <div class="season-info">${genres||"Anime"}${broadcast?`<br/>⏰ ${broadcast}`:""}<br/><span style="color:${isAiring?"#00ff88":"#555"}">${status}</span></div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:5px;">
+          <span class="ep-tag">📺 ${eps ? eps+" eps" : "Ongoing"}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:3px;margin-bottom:5px;">
+          ${Object.keys(SC).map(s =>
+            `<button class="status-btn" onclick="addToListSeason(${id},this,'${s}')"
+              style="background:${inL?.status===s ? SC[s] : "#1a1a2e"};color:${inL?.status===s ? "#000" : "#555"};padding:3px 6px;font-size:10px">${SI[s]} ${s}</button>`
+          ).join("")}
+        </div>
+        <a class="season-watch-btn" href="${wUrl1(rawTitle)}" target="_blank">🔁 Watch Free</a>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function refreshSchedule(){
+  scheduleData={};
+  loadSchedule(DAYS[activeDay]);
+  const s=getCurrentSeason();
+  seasonRes=[];
+  loadCurrentSeason(s.season,s.year,1);
+  notif("Schedule refreshed! 🔄","#00d4ff");
+}
+
+// ===== ANIME BROWSE =====
+function mkCats(id, cats, active, fn){
+  document.getElementById(id).innerHTML = cats.map((c,i) =>
+    `<button class="cat-pill${i===active?" active":""}" onclick="${fn}(${i})">${c.l}</button>`
+  ).join("");
+}
+function initBrowse(){ mkCats("anime-cats", ACATS, browse.cat, "selA"); fetchA(ACATS[browse.cat].u, ACATS[browse.cat].l); }
+function selA(i){ browse.cat=i; browse.query=""; document.getElementById("search-input").value=""; mkCats("anime-cats",ACATS,browse.cat,"selA"); fetchA(ACATS[i].u,ACATS[i].l); }
+async function fetchA(url, label){
+  setL("anime",true); browse.results=[];
+  try{
+    const r=await fetch(url); const d=await r.json();
+    browse.results=d.data||[]; browse.hasMore=false;
+    document.getElementById("anime-more").style.display="none";
+    document.getElementById("browse-label").textContent=label+" Anime";
+    renderG("anime-grid", browse.results, false);
+  }catch(e){}
+  setL("anime",false);
+}
+function onAnimeSearch(v){ browse.query=v; clearTimeout(browse.timer); if(!v.trim()){selA(browse.cat);return;} browse.timer=setTimeout(()=>srchA(v,1),600); }
+async function srchA(q, pg){
+  setL("anime",true);
+  try{
+    const r=await fetch(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(q)}&limit=20&page=${pg}&sfw=true`);
+    const d=await r.json();
+    if(pg===1) browse.results=d.data||[]; else browse.results=[...browse.results,...(d.data||[])];
+    browse.page=pg; browse.hasMore=d.pagination?.has_next_page||false;
+    document.getElementById("anime-more").style.display=browse.hasMore?"":"none";
+    document.getElementById("browse-label").textContent=`Results for "${escHtml(q)}"`;
+    renderG("anime-grid", browse.results, false);
+  }catch(e){}
+  setL("anime",false);
+}
+function loadMoreAnime(){ srchA(browse.query, (browse.page||1)+1); }
+
+// ===== NOTIFICATION SYSTEM =====
+let notifications = JSON.parse(localStorage.getItem("anitrack_notifs") || "[]");
+function saveNotifs(){ localStorage.setItem("anitrack_notifs", JSON.stringify(notifications.slice(0,50))); }
+function pushNotif(title, body, type="info"){
+  const n={id:Date.now(),title,body,type,time:new Date().toISOString(),read:false};
+  notifications.unshift(n); saveNotifs(); renderNotifList(); updateNotifBadge();
+}
+function updateNotifBadge(){
+  const unread=notifications.filter(n=>!n.read).length;
+  const badge=document.getElementById("notif-badge");
+  if(badge){badge.textContent=unread>9?"9+":unread;badge.style.display=unread>0?"flex":"none";}
+}
+function renderNotifList(){
+  const list=document.getElementById("notif-list");if(!list)return;
+  if(!notifications.length){list.innerHTML=`<div style="padding:30px 16px;text-align:center;color:#333;font-size:12px;">No notifications yet.<br/>Add anime to your list to get updates!</div>`;return;}
+  list.innerHTML=notifications.map(n=>{
+    const time=new Date(n.time).toLocaleDateString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+    const color=n.type==="success"?"#00ff88":n.type==="warning"?"#ff6b35":n.type==="error"?"#ff4466":"#00d4ff";
+    return`<div class="notif-item${n.read?"":" unread"}" onclick="markRead(${n.id})" style="border-left-color:${color}">
+      <div class="notif-item-title">${escHtml(n.title)}</div>
+      <div class="notif-item-body">${escHtml(n.body)}</div>
+      <div class="notif-item-time">${time}</div>
+    </div>`;
+  }).join("");
+}
+function markRead(id){const n=notifications.find(n=>n.id==id);if(n)n.read=true;saveNotifs();renderNotifList();updateNotifBadge();}
+function markAllRead(){notifications.forEach(n=>n.read=true);saveNotifs();renderNotifList();updateNotifBadge();}
+function openNotifPanel(){
+  if(!authGuard("mylist"))return;
+  document.getElementById("notif-panel").classList.add("open");
+  document.getElementById("notif-overlay").style.display="block";
+}
+function closeNotifPanel(){
+  document.getElementById("notif-panel").classList.remove("open");
+  document.getElementById("notif-overlay").style.display="none";
+}
+
+// ===== INFINITE SCROLL =====
+function setupInfiniteScroll(){
+  const sentinel=document.createElement("div");
+  sentinel.id="scroll-sentinel";
+  sentinel.style.cssText="height:10px;pointer-events:none;";
+  document.body.appendChild(sentinel);
+  new IntersectionObserver(entries=>{
+    if(!entries[0].isIntersecting)return;
+    if(curTab==="browse"&&browse.hasMore)loadMoreAnime();
+    if(curTab==="watch" &&watch.hasMore) loadMoreWatch();
+    if(curTab==="manga" &&manga.hasMore) loadMoreManga();
+  },{rootMargin:"400px"}).observe(sentinel);
+}
+
+// ===== WATCH HERO SEARCH =====
+function onWatchHeroSearch(v){
+  const q=v.trim();
+  if(q){
+    document.getElementById("btn-gogo").href=wUrl1(q);
+    document.getElementById("btn-crunchyroll").href=wUrl2(q);
+    document.getElementById("btn-tubi").href=wUrl3(q);
+  } else {
+    document.getElementById("btn-gogo").href="https://gogoanime.by";
+    document.getElementById("btn-crunchyroll").href="https://crunchyroll.com";
+    document.getElementById("btn-tubi").href="https://tubitv.com/category/anime";
+  }
+  // Also update grid
+  onWatchSearch(v);
+}
+function launchSearch(){
+  const q=document.getElementById("watch-hero-input").value.trim();
+  if(q)window.open(wUrl1(q),"_blank");
+}
+
+// ===== WATCH =====
+function initWatch(){ mkCats("watch-cats",ACATS,watch.cat,"selW"); fetchW(ACATS[watch.cat].u,ACATS[watch.cat].l); }
+function selW(i){ watch.cat=i; watch.query=""; const hi=document.getElementById("watch-hero-input"); if(hi)hi.value=""; onWatchHeroSearch(""); mkCats("watch-cats",ACATS,watch.cat,"selW"); fetchW(ACATS[i].u,ACATS[i].l); }
+async function fetchW(url, label){
+  setL("watch",true); watch.results=[];
+  try{
+    const r=await fetch(url); const d=await r.json();
+    watch.results=d.data||[]; watch.hasMore=false;
+    document.getElementById("watch-more").style.display="none";
+    document.getElementById("watch-label").textContent=label+" — Tap any anime to watch free instantly";
+    renderG("watch-grid", watch.results, true);
+  }catch(e){}
+  setL("watch",false);
+}
+function onWatchSearch(v){ watch.query=v; clearTimeout(watch.timer); if(!v.trim()){selW(watch.cat);return;} watch.timer=setTimeout(()=>srchW(v,1),600); }
+async function srchW(q, pg){
+  setL("watch",true);
+  try{
+    const r=await fetch(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(q)}&limit=20&page=${pg}&sfw=true`);
+    const d=await r.json();
+    if(pg===1) watch.results=d.data||[]; else watch.results=[...watch.results,...(d.data||[])];
+    watch.page=pg; watch.hasMore=d.pagination?.has_next_page||false;
+    document.getElementById("watch-more").style.display=watch.hasMore?"":"none";
+    document.getElementById("watch-label").textContent=`"${escHtml(q)}" — Tap to watch free instantly`;
+    renderG("watch-grid", watch.results, true);
+  }catch(e){}
+  setL("watch",false);
+}
+function loadMoreWatch(){ srchW(watch.query,(watch.page||1)+1); }
+
+// ===== GRID =====
+function renderG(gid, list, watchMode){
+  const g = document.getElementById(gid);
+  if(!list.length){ g.innerHTML=`<div class="empty" style="grid-column:1/-1"><div class="empty-icon">🔍</div>No results found</div>`; return; }
+  g.innerHTML = list.map(a => {
+    const id       = a.mal_id;
+    const inL      = WL[id];
+    const img      = a.images?.jpg?.large_image_url || a.images?.jpg?.image_url || "";
+    const title    = escHtml(a.title_english || a.title || "Unknown");
+    const rawTitle = a.title_english || a.title || "Unknown";
+    const score    = a.score;
+    const eps      = a.episodes;
+    const genres   = escHtml((a.genres||[]).slice(0,2).map(g=>g.name).join(", "));
+    const airStatus  = a.status || "";
+    const isAiring   = airStatus === "Currently Airing";
+    const airedFrom  = a.aired?.from ? new Date(a.aired.from).getFullYear() : "";
+    const seasonLabel = a.season ? `${a.season.charAt(0).toUpperCase()+a.season.slice(1)} ${a.year||""}` : "";
+    const epLabel    = eps ? `${eps} eps` : "Ongoing";
+    const sc         = inL ? SC[inL.status] : "";
+    return `<div class="anime-card${inL?" in-list":""}" style="--sc:${sc}">
+      <div class="card-img-wrap">
+        ${img
+          ? `<img class="card-img" src="${img}" alt="${title}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"/>
+             <div class="card-no-img" style="display:none">⛩</div>`
+          : `<div class="card-no-img">⛩</div>`}
+        ${score ? `<div class="card-score">MAL ★ ${score}</div>` : ""}
+        ${inL   ? `<div class="card-badge" style="background:${SC[inL.status]}">${SI[inL.status]}</div>` : ""}
+        <div class="card-grad"></div>
+      </div>
+      <div class="card-body">
+        <div class="card-title" title="${title}">${title}</div>
+        <div class="card-meta">${genres||"Anime"}</div>
+        <div class="ep-season-bar">
+          <span class="ep-tag">📺 ${epLabel}</span>
+          ${seasonLabel
+            ? `<span class="season-tag">🌸 ${escHtml(seasonLabel)}</span>`
+            : airedFrom ? `<span class="season-tag">📅 ${airedFrom}</span>` : ""}
+          ${isAiring
+            ? `<span class="airing-tag">🔴 Airing</span>`
+            : airStatus ? `<span class="ended-tag">${escHtml(airStatus)}</span>` : ""}
+        </div>
+        ${!watchMode ? `<div class="status-btns">
+          ${Object.keys(SC).map(s =>
+            `<button class="status-btn${inL?.status===s?" active-status":""}"
+              style="background:${inL?.status===s ? SC[s] : "#1a1a2e"};color:${inL?.status===s ? "#000" : "#555"}"
+              onclick="addToList(${id},'${s}')">${SI[s]} ${escHtml(s)}</button>`
+          ).join("")}
+        </div>` : ""}
+        <button class="synopsis-btn" onclick="openSynopsis(${id})">📖 Synopsis & Details</button>
+        <button class="watch-btn"  onclick="guardedWatch('${wUrl1(rawTitle)}','watch')">🔁 Gogoanime — Watch Free</button>
+        <button class="watch-btn2" onclick="guardedWatch('${wUrl2(rawTitle)}','watch')">✅ Crunchyroll</button>
+        <button class="watch-btn2" style="margin-top:3px;border-color:#00ff8833;color:#00ff88;" onclick="guardedWatch('${wUrl3(rawTitle)}','watch')">✅ Tubi</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// ===== AUTH GUARD =====
+function authGuard(actionName){
+  if(window._currentUser) return true;
+  const title  = document.getElementById("auth-prompt-title");
+  const sub    = document.getElementById("auth-prompt-sub");
+  const prompt = document.getElementById("auth-prompt");
+  const messages = {
+    "watchlist": ["🔐 Sign In to Track Anime",       "Add anime to your personal watchlist, synced across all devices."],
+    "watch":     ["🔐 Sign In to Watch",              "Get direct links to watch free on Gogoanime, Crunchyroll & Tubi."],
+    "mylist":    ["🔐 Sign In to View My List",       "Your watchlist, episode progress and ratings — all in one place."],
+    "rating":    ["🔐 Sign In to Rate",               "Rate anime and track your personal scores across all devices."],
+    "episode":   ["🔐 Sign In to Track Episodes",     "Track exactly which episodes you've watched, synced to the cloud."],
+    "synopsis":  ["🔐 Sign In for Full Details",      "View synopsis, seasons breakdown, episodes and watch links."],
+    "manga":     ["🔐 Sign In to Browse Manga",       "Access the full MangaDex library and read thousands of titles."],
+    "ai":        ["🔐 Sign In to Use AniBot",         "Ask AniBot anything — recommendations, schedules, anime info and more."],
+    "manga-tab": ["🔐 Sign In to Browse Manga",       "Access the full MangaDex library and read thousands of titles free."],
+    "watch-tab": ["🔐 Sign In to Watch Anime",        "Get direct links to any anime on Gogoanime, Crunchyroll and Tubi."],
+  };
+  const [t, s] = messages[actionName] || ["🔐 Sign In Required","Create a free account to access this feature."];
+  title.textContent = t;
+  sub.textContent   = s;
+  prompt.classList.add("show");
+  return false;
+}
+function closeAuthPrompt(){
+  document.getElementById("auth-prompt").classList.remove("show");
+}
+
+// ===== UNIFIED WATCHLIST ACTIONS =====
+function addToList(id, status){
+  if(!authGuard("watchlist")) return;
+  const anime = [...browse.results,...watch.results,...seasonRes].find(a=>a.mal_id==id) || WL[id];
+  if(!anime) return;
+  saveToWatchlist(anime, status);
+  if(curTab==="browse") renderG("anime-grid", browse.results, false);
+  if(curTab==="watch")  renderG("watch-grid", watch.results,  true);
+}
+function addToListSeason(id, btn, status){
+  if(!authGuard("watchlist")) return;
+  const anime = seasonRes.find(a=>a.mal_id==id) || WL[id];
+  if(!anime) return;
+  saveToWatchlist(anime, status);
+  renderSeasonGrid();
+}
+function addToListFromSchedule(id, btn, status){
+  if(!authGuard("watchlist")) return;
+  const items = scheduleData[DAYS[activeDay]] || [];
+  const anime = items.find(a=>a.mal_id==id) || WL[id];
+  if(!anime) return;
+  saveToWatchlist(anime, status);
+  renderSchedule(items, DAYS[activeDay]);
+}
+
+
+// ===== SYNOPSIS MODAL =====
+async function openSynopsis(id){
+  if(!authGuard("synopsis")) return;
+  const modal=document.getElementById("synopsis-modal");
+  modal.style.display="block";
+  document.body.style.overflow="hidden";
+  let anime = [...browse.results,...watch.results,...seasonRes].find(a=>a.mal_id==id) || WL[id];
+  if(!anime){document.getElementById("syn-text").textContent="Could not load details.";return;}
+  const title=anime.title_english||anime.title||"Unknown";
+  const img=anime.images?.jpg?.large_image_url||anime.images?.jpg?.image_url||"";
+  const score=anime.score;
+  const eps=anime.episodes;
+  const status=anime.status||"Unknown";
+  const genres=(anime.genres||[]).map(g=>g.name).join(", ")||"N/A";
+  const studios=(anime.studios||[]).map(s=>s.name).join(", ")||"N/A";
+  const aired=anime.aired?.string||"Unknown";
+  const rating=anime.rating||"N/A";
+  const type=anime.type||"N/A";
+  const duration=anime.duration||"N/A";
+  const source=anime.source||"N/A";
+  // Poster
+  const posterWrap=document.getElementById("syn-poster-wrap");
+  posterWrap.innerHTML=img?`<img class="synopsis-poster" src="${img}" alt="${escHtml(title)}"/>`:`<div class="synopsis-poster-ph">⛩</div>`;
+  // Title & tags
+  document.getElementById("syn-title").textContent=title;
+  document.getElementById("syn-tags").innerHTML=
+    (anime.genres||[]).slice(0,3).map(g=>`<span class="synopsis-stag" style="background:rgba(168,85,247,0.15);border:1px solid #a855f733;color:#a855f7">${escHtml(g.name)}</span>`).join("")+
+    `<span class="synopsis-stag" style="background:rgba(0,212,255,0.1);border:1px solid #00d4ff33;color:#00d4ff">${escHtml(type)}</span>`;
+  document.getElementById("syn-score").innerHTML=score?`⭐ MAL Score: <b>${score}/10</b>`:"⭐ Not yet rated";
+  // Basic details grid
+  document.getElementById("syn-details").innerHTML=`
+    <div class="synopsis-detail"><div class="synopsis-dlabel">📡 Status</div><div class="synopsis-dval" style="color:${status==="Currently Airing"?"#00ff88":"#aaa"}">${escHtml(status)}</div></div>
+    <div class="synopsis-detail"><div class="synopsis-dlabel">📅 Aired</div><div class="synopsis-dval">${escHtml(aired)}</div></div>
+    <div class="synopsis-detail"><div class="synopsis-dlabel">🎬 Studio</div><div class="synopsis-dval">${escHtml(studios)}</div></div>
+    <div class="synopsis-detail"><div class="synopsis-dlabel">📖 Source</div><div class="synopsis-dval">${escHtml(source)}</div></div>
+    <div class="synopsis-detail"><div class="synopsis-dlabel">⏱ Duration</div><div class="synopsis-dval">${escHtml(duration)}</div></div>
+    <div class="synopsis-detail"><div class="synopsis-dlabel">🔞 Rating</div><div class="synopsis-dval">${escHtml(rating)}</div></div>
+  `;
+  // Watch button
+  document.getElementById("syn-watch").dataset.url = wUrl1(title);
+  // Synopsis
+  if(anime.synopsis||anime.background){
+    document.getElementById("syn-text").textContent=anime.synopsis||anime.background||"No synopsis available.";
+  } else {
+    document.getElementById("syn-text").textContent="Loading synopsis...";
+    try{
+      const r=await fetch(`https://api.jikan.moe/v4/anime/${id}`);
+      const d=await r.json();
+      const syn=d.data?.synopsis||d.data?.background||"No synopsis available for this anime yet.";
+      document.getElementById("syn-text").textContent=syn;
+      const src = [...browse.results,...watch.results,...seasonRes].find(a=>a.mal_id==id);
+      if(src)src.synopsis=syn;
+      if(WL[id])WL[id].synopsis=syn;
+    }catch(e){
+      document.getElementById("syn-text").textContent="Synopsis unavailable.";
+    }
+  }
+  // ===== SEASONS BREAKDOWN =====
+  const seasonsEl=document.getElementById("syn-seasons");
+  seasonsEl.innerHTML=`<div style="color:#555;font-size:12px;padding:8px 0;">⏳ Loading seasons & episodes...</div>`;
+  try{
+    // Step 1: fetch full anime details to get relations
+    const mainR=await fetch(`https://api.jikan.moe/v4/anime/${id}/full`);
+    const mainD=await mainR.json();
+    const mainData=mainD.data||{};
+    const relations=mainData.relations||[];
+
+    // Step 2: collect ALL sequel & prequel entries
+    const sequelEntries=relations.filter(r=>r.relation==="Sequel").flatMap(r=>r.entry).filter(e=>e.type==="anime");
+    const prequelEntries=relations.filter(r=>r.relation==="Prequel").flatMap(r=>r.entry).filter(e=>e.type==="anime");
+
+    // Step 3: walk back to root via prequels recursively (max 8 hops to avoid infinite)
+    async function walkToRoot(currentId, hops=0){
+      if(hops>8)return currentId;
+      await new Promise(res=>setTimeout(res,300));
+      try{
+        const rr=await fetch(`https://api.jikan.moe/v4/anime/${currentId}/full`);
+        const dd=await rr.json();
+        const rels=dd.data?.relations||[];
+        const pqs=rels.filter(r=>r.relation==="Prequel").flatMap(r=>r.entry).filter(e=>e.type==="anime");
+        if(pqs.length>0)return walkToRoot(pqs[0].mal_id, hops+1);
+        return{id:currentId,data:dd.data};
+      }catch{return{id:currentId,data:null};}
+    }
+
+    // Step 4: if this anime has prequels, walk to root first
+    let rootId=id, rootData=mainData;
+    if(prequelEntries.length>0){
+      const root=await walkToRoot(prequelEntries[0].mal_id);
+      rootId=root.id;
+      rootData=root.data||mainData;
+    }
+
+    // Step 5: from root, collect entire sequel chain
+    async function collectChain(startId, startData){
+      const chain=[];
+      let curId=startId, curData=startData, safety=0;
+      while(curId && safety<15){
+        safety++;
+        if(!curData){
+          await new Promise(res=>setTimeout(res,300));
+          try{
+            const rr=await fetch(`https://api.jikan.moe/v4/anime/${curId}/full`);
+            const dd=await rr.json();
+            curData=dd.data;
+          }catch{break;}
+        }
+        if(!curData)break;
+
+        // For airing anime, also fetch actual aired episode count
+        let actualEps=curData.episodes;
+        if(curData.status==="Currently Airing"){
+          try{
+            await new Promise(res=>setTimeout(res,250));
+            const epR=await fetch(`https://api.jikan.moe/v4/anime/${curId}/episodes`);
+            const epD=await epR.json();
+            const epCount=epD.data?.length||0;
+            const lastPage=epD.pagination?.last_visible_page||1;
+            if(lastPage>1){
+              // Multiple pages — fetch last page to get true count
+              await new Promise(res=>setTimeout(res,250));
+              const epRL=await fetch(`https://api.jikan.moe/v4/anime/${curId}/episodes?page=${lastPage}`);
+              const epDL=await epRL.json();
+              const lastEp=epDL.data?.[epDL.data.length-1]?.mal_id||0;
+              actualEps=lastEp||epCount;
+            } else {
+              actualEps=epCount||curData.episodes;
+            }
+          }catch{actualEps=curData.episodes;}
+        }
+
+        chain.push({
+          mal_id:curId,
+          title:curData.title_english||curData.title||"Unknown",
+          episodes:actualEps,
+          status:curData.status||"",
+          aired:curData.aired?.from||null,
+          year:curData.year||null
+        });
+
+        // Find next sequel
+        const rels=curData.relations||[];
+        const nextSequel=rels.filter(r=>r.relation==="Sequel").flatMap(r=>r.entry).find(e=>e.type==="anime");
+        if(!nextSequel)break;
+        curId=nextSequel.mal_id;
+        curData=null;
+      }
+      return chain;
+    }
+
+    const chain=await collectChain(rootId, rootData);
+
+    // Step 6: render
+    if(!chain.length){
+      throw new Error("Empty chain");
+    }
+
+    const totalSeasons=chain.length;
+    const totalEps=chain.reduce((sum,s)=>sum+(s.episodes||0),0);
+    const hasOngoing=chain.some(s=>s.status==="Currently Airing"||s.status==="Not yet aired");
+
+    let summaryHtml=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding:6px 10px;background:#0d0d1a;border-radius:8px;">
+      <span style="font-size:11px;color:#555;">${totalSeasons} Season${totalSeasons>1?"s":""} • ${totalEps?totalEps+" eps total":""}${hasOngoing?" • 🔴 Ongoing":""}</span>
+      <button onclick="openSynopsis(${id})" style="background:rgba(0,212,255,0.08);border:1px solid #00d4ff33;color:#00d4ff;border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">🔄 Refresh</button>
+    </div>`;
+
+    const rowsHtml=chain.map((s,i)=>{
+      const isAiring=s.status==="Currently Airing";
+      const isUpcoming=s.status==="Not yet aired";
+      const isFinished=s.status==="Finished Airing";
+      const epText=s.episodes
+        ?(isAiring?`${s.episodes} eps so far`:
+          `${s.episodes} episode${s.episodes>1?"s":""}`)
+        :(isAiring?"Ongoing":isUpcoming?"Upcoming":"TBA");
+      const year=s.aired?new Date(s.aired).getFullYear():"";
+      const isCurrent=s.mal_id==id;
+      return`<div class="season-row${isAiring?" season-row-active":""}${isCurrent?" season-row-current":""}">
+        <div class="season-row-num">S${i+1}</div>
+        <div style="flex:1;min-width:0;">
+          <div class="season-row-eps">${epText}${isAiring?" <span style='font-size:9px;color:#00ff88;font-weight:700;'>• Ongoing</span>":""}</div>
+          <div class="season-row-title" title="${escHtml(s.title)}">${escHtml(s.title)}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0;">
+          ${year?`<div class="season-row-tag">${year}</div>`:""}
+          ${isAiring?`<span class="airing-tag" style="font-size:9px;padding:1px 6px;">🔴 Live</span>`:""}
+          ${isUpcoming?`<span style="font-size:9px;color:#ff6b35;font-weight:700;">⏳ Soon</span>`:""}
+          ${isFinished?`<span style="font-size:9px;color:#333;font-weight:700;">✓ Done</span>`:""}
+        </div>
+      </div>`;
+    }).join("");
+
+    seasonsEl.innerHTML=summaryHtml+rowsHtml;
+
+  }catch(e){
+    // Fallback — use what we already have from the main anime object
+    const epCount=anime.episodes;
+    const isAiring=anime.status==="Currently Airing";
+    const year=anime.year||(anime.aired?.from?new Date(anime.aired.from).getFullYear():"");
+    seasonsEl.innerHTML=`<div class="season-row${isAiring?" season-row-active":""}">
+      <div class="season-row-num">S1</div>
+      <div style="flex:1;">
+        <div class="season-row-eps">${epCount?epCount+" episodes":(isAiring?"Currently airing":"TBA")}</div>
+        <div class="season-row-title">${escHtml(anime.title_english||anime.title||"")}</div>
+      </div>
+      ${year?`<div class="season-row-tag">${year}</div>`:""}
+    </div>`;
+  }
+}
+function closeSynopsis(){
+  document.getElementById("synopsis-modal").style.display="none";
+  document.body.style.overflow="";
+}
+
+
+// ===== MANGA =====
+function initManga(){ mkCats("manga-cats",MCATS,manga.cat,"selM"); fetchM("",0); }
+function selM(i){ manga.cat=i; manga.query=""; manga.offset=0; document.getElementById("manga-input").value=""; mkCats("manga-cats",MCATS,manga.cat,"selM"); fetchM(MCATS[i].t,0,MCATS[i].l); }
+async function fetchM(tag, off, label){
+  setL("manga",true);
+  try{
+    let url=`https://api.mangadex.org/manga?limit=24&offset=${off}&order[rating]=desc&contentRating[]=safe&contentRating[]=suggestive&includes[]=cover_art`;
+    if(tag) url+=`&includedTags[]=${tag}`;
+    const r=await fetch(url); if(!r.ok) throw new Error();
+    const d=await r.json(); const items=d.data||[];
+    if(off===0) manga.results=items; else manga.results=[...manga.results,...items];
+    manga.hasMore=(d.total||0)>(off+items.length); manga.offset=off+items.length;
+    document.getElementById("manga-more").style.display=manga.hasMore?"":"none";
+    document.getElementById("manga-label").textContent=(label||MCATS[manga.cat].l)+" Manga — Updated Daily";
+    renderMG();
+  }catch(e){
+    document.getElementById("manga-grid").innerHTML=`<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📖</div><div style="font-size:12px;line-height:2;">Manga loads when hosted online!<br/>Upload to <strong style="color:#00d4ff">tiiny.host</strong> to activate.<br/><br/><a href="https://mangadex.org" target="_blank" style="color:#a855f7;font-weight:700;">📖 Browse MangaDex →</a></div></div>`;
+  }
+  setL("manga",false);
+}
+function onMangaSearch(v){ manga.query=v; clearTimeout(manga.timer); if(!v.trim()){selM(manga.cat);return;} manga.timer=setTimeout(()=>srchM(v,0),600); }
+async function srchM(q, off){
+  setL("manga",true);
+  try{
+    const r=await fetch(`https://api.mangadex.org/manga?title=${encodeURIComponent(q)}&limit=24&offset=${off}&contentRating[]=safe&contentRating[]=suggestive&includes[]=cover_art`);
+    const d=await r.json(); const items=d.data||[];
+    if(off===0) manga.results=items; else manga.results=[...manga.results,...items];
+    manga.hasMore=(d.total||0)>(off+items.length); manga.offset=off+items.length;
+    document.getElementById("manga-more").style.display=manga.hasMore?"":"none";
+    document.getElementById("manga-label").textContent=`Results for "${escHtml(q)}"`;
+    renderMG();
+  }catch(e){}
+  setL("manga",false);
+}
+function loadMoreManga(){ if(manga.query) srchM(manga.query,manga.offset); else fetchM(MCATS[manga.cat].t,manga.offset); }
+function getCover(m){ const c=m.relationships?.find(r=>r.type==="cover_art"); return c?.attributes?.fileName?`https://uploads.mangadex.org/covers/${m.id}/${c.attributes.fileName}.256.jpg`:""; }
+function renderMG(){
+  const g = document.getElementById("manga-grid");
+  if(!manga.results.length){ g.innerHTML=`<div class="empty" style="grid-column:1/-1"><div class="empty-icon">📖</div>No results</div>`; return; }
+  g.innerHTML = manga.results.map(m => {
+    const title   = escHtml(m.attributes?.title?.en || Object.values(m.attributes?.title||{})[0] || "Unknown");
+    const cover   = getCover(m);
+    const score   = m.attributes?.rating?.bayesian
+      ? Number(m.attributes.rating.bayesian).toFixed(2)
+      : m.attributes?.rating?.average ? Number(m.attributes.rating.average).toFixed(2) : "";
+    const ch      = m.attributes?.lastChapter ? `Ch.${escHtml(m.attributes.lastChapter)}` : "Ongoing";
+    const status  = m.attributes?.status || "";
+    const statusColor = status==="ongoing"?"#00ff88":status==="completed"?"#00d4ff":status==="hiatus"?"#ff6b35":"#555";
+    const genres  = (m.attributes?.tags||[]).filter(t=>t.attributes?.group==="genre").slice(0,2).map(t=>escHtml(t.attributes?.name?.en||"")).join(", ");
+    const desc    = escHtml((m.attributes?.description?.en||"").slice(0,80)) + (m.attributes?.description?.en?.length>80?"...":"");
+    const type    = escHtml(m.type || "manga");
+    return `<div class="manga-card">
+      <div class="manga-img-wrap">
+        ${cover
+          ? `<img class="manga-img" src="${cover}" alt="${title}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"/>
+             <div class="manga-no-img" style="display:none">📖</div>`
+          : `<div class="manga-no-img">📖</div>`}
+        ${score ? `<div class="manga-score">★ ${score}</div>` : ""}
+        <div style="position:absolute;bottom:6px;left:6px;background:${statusColor}22;border:1px solid ${statusColor}55;border-radius:4px;padding:1px 5px;font-size:8px;font-weight:800;color:${statusColor};text-transform:capitalize;">${escHtml(status)||"—"}</div>
+        <div class="manga-grad"></div>
+      </div>
+      <div class="manga-body">
+        <div class="manga-title" title="${title}">${title}</div>
+        <div class="manga-meta" style="font-size:9px;color:#444;margin-bottom:4px;">${genres||escHtml(type)} • ${ch}</div>
+        ${desc ? `<div style="font-size:9px;color:#333;line-height:1.4;margin-bottom:5px;">${desc}</div>` : ""}
+        <a class="read-btn" href="https://mangadex.org/title/${m.id}" target="_blank">📖 Read on MangaDex</a>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// ===== MY LIST =====
+function renderMyList(){
+  document.getElementById("list-filters").innerHTML=["all",...Object.keys(SC)].map(s=>`
+    <button class="filter-btn" onclick="setFilter('${s}')" style="background:${filterS===s?(s==="all"?"#00d4ff":SC[s]):"rgba(17,17,32,0.8)"};color:${filterS===s?"#000":"#555"}">
+      ${s==="all"?"All":`${SI[s]} ${s}`}</button>`).join("");
+  const list=Object.values(WL).filter(a=>filterS==="all"||a.status===filterS);
+  const wrap=document.getElementById("list-items");
+  if(!list.length){wrap.innerHTML=`<div class="empty"><div class="empty-icon">⛩</div>Nothing here yet!</div>`;return;}
+  wrap.innerHTML = list.map(a => {
+    const id       = a.mal_id;
+    const img      = a.images?.jpg?.image_url || "";
+    const title    = escHtml(a.title_english || a.title || "Unknown");
+    const rawTitle = a.title_english || a.title || "Unknown";
+    const tot      = a.episodes || null;
+    const wat      = a.episodesWatched || 0;
+    const prog     = tot ? Math.round((wat/tot)*100) : 0;
+    const rat      = a.myRating || 0;
+    const genres   = escHtml((a.genres||[]).slice(0,2).map(g=>g.name).join(", "));
+    const season   = a.season ? escHtml(` • ${a.season} ${a.year||""}`) : "";
+    const broadcast = a.broadcast?.string ? `<br/>⏰ ${escHtml(a.broadcast.string)}` : "";
+    return `<div class="list-item" style="border-color:${SC[a.status]}22">
+      ${img
+        ? `<img class="list-img" src="${img}" onerror="this.style.background='#1a1a2e'"/>`
+        : `<div class="list-img" style="background:#1a1a2e;display:flex;align-items:center;justify-content:center">⛩</div>`}
+      <div class="list-info">
+        <div class="list-title">${title}</div>
+        <div class="list-meta">${genres||"Anime"}${tot?` • ${tot} eps`:""}${a.score?` • MAL ★${a.score}`:""}${season}${broadcast}</div>
+        <div style="font-size:10px;color:#555;margin-bottom:3px">Watched: ${wat}${tot?`/${tot}`:""}</div>
+        <div class="ep-row">
+          <button class="ep-btn" onclick="chEp(${id},-1)">−</button>
+          <input class="ep-input" type="number" value="${wat}" onchange="setEp(${id},this.value)"/>
+          <button class="ep-btn" onclick="chEp(${id},1)">+</button>
+          ${tot ? `<div class="progress-bar"><div class="progress-fill" style="width:${prog}%;background:${SC[a.status]}"></div></div>` : ""}
+        </div>
+        <div style="font-size:10px;color:#555;margin-bottom:3px">My rating: ${rat?rat+"/10":"—"}</div>
+        <div class="stars">${[1,2,3,4,5,6,7,8,9,10].map(s=>`<span class="star${s<=rat?" on":""}" onclick="setRat(${id},${s})">★</span>`).join("")}</div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">
+          ${Object.keys(SC).map(s =>
+            `<button class="status-btn" onclick="chSt(${id},'${s}')"
+              style="background:${a.status===s ? SC[s] : "#1a1a2e"};color:${a.status===s ? "#000" : "#555"}">${SI[s]} ${s}</button>`
+          ).join("")}
+        </div>
+        <a class="watch-btn-sm" href="${wUrl1(rawTitle)}" target="_blank">🎬 Watch Free</a>
+      </div>
+      <button class="remove-btn" onclick="rmA(${id})">✕</button>
+    </div>`;
+  }).join("");
+}
+function setFilter(s){filterS=s;renderMyList();}
+function guardedWatch(url, type){
+  if(!authGuard(type)) return;
+  window.open(url, "_blank");
+}
+function chEp(id,d){
+  if(!authGuard("episode")) return;
+  const a=WL[id];if(!a)return;
+  a.episodesWatched=Math.max(0,Math.min((a.episodesWatched||0)+d,a.episodes||9999));
+  saveWL();renderMyList();
+}
+function setEp(id,v){
+  if(!authGuard("episode")) return;
+  const a=WL[id];if(!a)return;
+  a.episodesWatched=Math.max(0,Math.min(Number(v)||0,a.episodes||9999));
+  saveWL();renderMyList();
+}
+function setRat(id,r){
+  if(!authGuard("rating")) return;
+  if(WL[id]){WL[id].myRating=r;saveWL();renderMyList();}
+}
+function chSt(id,s){
+  if(!authGuard("watchlist")) return;
+  if(WL[id]){WL[id].status=s;saveWL();renderStats();updateMLTab();renderMyList();}
+}
+function rmA(id){
+  if(!authGuard("watchlist")) return;
+  delete WL[id];saveWL();renderStats();updateMLTab();renderMyList();
+}
+
+// ===== STATS =====
+function renderStats(){
+  const c={};Object.keys(SC).forEach(s=>c[s]=Object.values(WL).filter(a=>a.status===s).length);
+  const tot=Object.keys(WL).length;
+  document.getElementById("stats").innerHTML=Object.entries(c).map(([s,n])=>`
+    <div class="stat-card" style="--color:${SC[s]}"><span style="color:${SC[s]}">${SI[s]}</span>
+    <div><div class="stat-num">${n}</div><div class="stat-label">${s}</div></div></div>`).join("")+
+    `<div class="stat-card"><span>📚</span><div><div class="stat-num">${tot}</div><div class="stat-label">Total</div></div></div>`;
+}
+function updateMLTab(){document.getElementById("mylist-tab").textContent=`📋 My List (${Object.keys(WL).length})`;}
+
+// ===== ANIBOT =====
+const KB=[
+  {k:["hi","hello","hey","sup","yo","what's up","whats up","good morning","good evening"],r:`YO!! 🔥⚡ What's good! I'm AniBot — your ultimate anime & manga encyclopedia by Excellent Error! I know EVERYTHING — recommendations, anime info, schedules, genres, strongest characters, best manga and more! Just ask! 🎌`},
+  {k:["who are you","what are you","your name","anibot"],r:`I'm AniBot! 🤖⚡ The official AI of AniTrack by Excellent Error!\n\n📌 Detailed info on ANY popular anime\n🎯 Recommendations by genre/mood/length\n📖 Manga & manhwa info\n📅 Daily release schedule explanations\n🏆 Strongest characters ranked\n😭 Saddest moments, best openings\n🎵 Genre explanations\n\nPowered by hundreds of hours of anime knowledge! 🔥`},
+  {k:["thank","thanks","thank you","appreciate","great","awesome"],r:`YOU'RE WELCOME!! 🔥🎌 That's exactly what I'm here for! Ask me anything else about anime or manga! ⚡`},
+  {k:["schedule","when does","what day","airing day","release day","daily update","daily release"],r:`📅 DAILY ANIME SCHEDULE:\n\nUse AniTrack's 📅 Daily Updates tab! It shows:\n\n🔴 Today's airing anime — highlighted in green\n📺 Episode count for each anime\n🌸 Current season (Spring/Summer/Fall/Winter)\n⏰ Broadcast time for each anime\n📅 Day-by-day schedule (Mon-Sun)\n🔄 Refresh button to get latest data\n\nThe schedule pulls LIVE from MyAnimeList via Jikan API — updated daily!\n\nYou can also add any scheduled anime directly to your watchlist from there! ⚡`},
+  {k:["what season","current season","spring anime","summer anime","fall anime","winter anime","season 2026"],r:`🌸 ANIME SEASONS:\n\nAnime is released in 4 seasons per year:\n\n❄️ Winter — January to March\n🌸 Spring — April to June\n☀️ Summer — July to September\n🍂 Fall — October to December\n\nEach season has 30-50+ new anime airing!\n\n📅 Check the Daily Updates tab to see:\n• All currently airing anime this season\n• Their episode counts\n• Broadcast schedule\n• MAL ratings\n\nNew season starts every 3 months with fresh anime! 🔥`},
+  {k:["what is anime","define anime","explain anime"],r:`ANIME 🎌 — The Full Breakdown:\n\nAnime is Japanese animated content covering EVERY genre! Unlike Western cartoons:\n✅ Deep complex storylines\n✅ Emotional character development\n✅ Stunning modern animation\n✅ Iconic soundtracks\n✅ Stories for all ages\n\n📺 Types: TV Series, Movies, OVA, ONA, Specials\n\n🌍 100M+ fans worldwide! Billions in industry revenue!\n\nBest entry points: Death Note, FMA Brotherhood, Demon Slayer, Attack on Titan! 🔥`},
+  {k:["what is manga","define manga"],r:`MANGA 📖 — Complete Guide:\n\nJapanese comic books read RIGHT TO LEFT! Most anime are adapted FROM manga!\n\n📚 Categories:\n• Shonen — teen boys (Naruto, One Piece)\n• Shojo — teen girls (Fruits Basket, Sailor Moon)\n• Seinen — adult men (Berserk, Monster)\n• Josei — adult women (Nana)\n\n🆓 Read FREE on MangaDex!\n\nMust-reads: Berserk, One Piece, Vagabond, Vinland Saga, Monster! 🔥`},
+  {k:["what is donghua","chinese anime","donghua"],r:`DONGHUA 🐉 — Chinese Animation:\n\nChina's anime! Quality has EXPLODED recently!\n\n🏆 Top Donghua:\n1. Soul Land — martial arts epic\n2. Battle Through the Heavens\n3. The King's Avatar — esports\n4. Fog Hill of Five Elements — STUNNING\n5. Link Click — emotional thriller\n6. Heaven Official's Blessing\n\n📺 Watch on: Bilibili.tv, WeTV! 🔥`},
+  {k:["what is manhwa","korean anime","manhwa"],r:`MANHWA 📖 — Korean Comics:\n\nRead LEFT TO RIGHT, usually FULL COLOR!\n\n🏆 Must-Read:\n1. Solo Leveling — THE manhwa\n2. Tower of God\n3. The Beginning After the End\n4. Omniscient Reader\n5. Eleceed\n6. True Beauty\n7. Weak Hero\n\n📺 Read on: Webtoon app, MangaDex! ⚡`},
+  {k:["what is isekai","isekai meaning","isekai"],r:`ISEKAI 🌀 — "Another World":\n\nCharacter gets transported/reincarnated into another world! Most popular genre right now!\n\n🎭 Types: Reincarnation, Summoning, Game world, Regression, Villainess\n\n🏆 Best Isekai:\n1. Re:Zero — dark & intense\n2. That Time I Got Reincarnated as a Slime\n3. Overlord — OP dark protagonist\n4. No Game No Life — genius\n5. Mushoku Tensei — detailed world\n6. KonoSuba — comedy gold\n7. Rising of Shield Hero\n8. Ascendance of a Bookworm\n\nNew isekai EVERY season! 🔥`},
+  {k:["what is shonen","shounen"],r:`SHONEN ⚔️ — King of Anime:\n\nTargets teen boys but beloved by all!\n✅ Action, friendship, hard work, never giving up\n✅ Power-ups and training arcs\n✅ Tournament arcs and epic battles\n\n📊 Big Three (Classic): Naruto, One Piece, Bleach\n🔥 New Big Three: Demon Slayer, JJK, MHA\n\nPublished in Weekly Shonen Jump — most famous manga magazine ever!\n\nAlmost ALL the most popular anime are Shonen! 🏆`},
+  {k:["beginner","new to anime","first anime","where to start"],r:`WELCOME TO ANIME!! 🎌🔥\n\n🥇 BEST FIRST ANIME:\n1. Fullmetal Alchemist Brotherhood — 64 eps, PERFECT story, no filler. GOAT!\n2. Death Note — 37 eps, psychological thriller, gripping ep 1\n3. Attack on Titan — 87 eps, mind-blowing\n4. Demon Slayer — most beautiful animation\n\n🎯 BY PREFERENCE:\n• Action → Demon Slayer / JJK\n• Mystery → Death Note\n• Epic adventure → One Piece / Naruto\n• Romance → Your Lie in April 😭\n• Comedy → KonoSuba / Saiki K\n• Horror → Parasyte\n• Sci-Fi → Steins;Gate\n\n✅ Watch SUB for authentic experience!\n✅ Give each anime 3 episodes!\n✅ Use AniTrack to track! 🔥`},
+  {k:["best action","action anime","action recommendation"],r:`🔥 BEST ACTION ANIME:\n\n🥇 S-TIER:\n1. Fullmetal Alchemist Brotherhood\n2. Attack on Titan\n3. Hunter x Hunter\n4. Demon Slayer\n5. Jujutsu Kaisen\n\n🥈 A-TIER:\n6. One Punch Man\n7. Bleach: TYBW\n8. Vinland Saga\n9. Mob Psycho 100\n10. My Hero Academia\n\n🥉 B-TIER:\n11. Black Clover\n12. Fairy Tail\n13. Naruto Shippuden\n14. Dragon Ball Z\n\nFMA Brotherhood → AOT → HxH = ULTIMATE action journey! ⚡`},
+  {k:["best romance","romance anime"],r:`💕 BEST ROMANCE ANIME:\n\n😭 EMOTIONAL MASTERPIECES:\n1. Your Lie in April — music + love + tragedy. WILL destroy you\n2. Clannad After Story — #1 most emotional\n3. Anohana — grief and love\n4. A Silent Voice (movie)\n5. I Want to Eat Your Pancreas (movie)\n\n💕 WHOLESOME:\n6. Toradora — classic tsundere\n7. Fruits Basket — healing masterpiece\n8. Horimiya — realistic couple\n9. My Dress-Up Darling\n10. Ore Monogatari\n\n😂 COMEDY ROMANCE:\n11. Kaguya-sama: Love is War\n12. Ouran High School Host Club\n\nStart with Your Lie in April! 🎵`},
+  {k:["best horror","horror anime","scary anime"],r:`👻 BEST HORROR ANIME:\n\n😱 PSYCHOLOGICAL:\n1. Monster — scariest villain in anime. Masterpiece.\n2. Paranoia Agent — Satoshi Kon genius\n3. Higurashi — disturbing village mystery\n4. Serial Experiments Lain\n\n💀 SURVIVAL/GORE:\n5. Parasyte: The Maxim — body horror masterpiece\n6. Tokyo Ghoul\n7. Elfen Lied — brutal\n8. Made in Abyss — deceptively DARK\n9. Attack on Titan — survival horror\n\n👁️ SUPERNATURAL:\n10. Another\n11. Shiki — vampire village\n12. Hellsing Ultimate (OVA)\n\nStart with Parasyte! 🔥`},
+  {k:["naruto","naruto shippuden"],r:`🍥 NARUTO — Complete Guide:\n\n📺 Episodes:\n• Naruto Part 1: 220 eps (45% filler!)\n• Naruto Shippuden: 500 eps (41% filler!)\n• Boruto: 293 eps\n\n⭐ MAL: 8.3/10\n\n📖 Story: Naruto Uzumaki — orphaned ninja with Nine-Tails demon fox inside him — dreams of becoming Hokage! From outcast to hero!\n\n🔥 Must-Watch Arcs:\n• Chunin Exams\n• Zabuza/Haku (ep 18-19 hits HARD)\n• Pain Invasion — GREATEST arc\n• Itachi's Truth — mind-blowing reveal\n• Fourth Shinobi War\n\n👥 Best Characters: Naruto, Sasuke, Kakashi, Itachi, Minato, Pain, Madara\n\n💡 Use narufiller.com to skip filler! 🎌`},
+  {k:["one piece","luffy","straw hat"],r:`☠️ ONE PIECE — Greatest Manga Ever Written:\n\n📺 Episodes: 1100+ (still going since 1999!)\n📖 Manga: 1100+ chapters\n⭐ MAL: 8.9/10\n📅 Currently: Egghead/Elbaf arc!\n\n📖 Story: Luffy (rubber man) and his Straw Hat crew sail to find the legendary treasure "One Piece" and make Luffy King of the Pirates!\n\n🔥 BEST ARCS:\n1. Marineford War — most epic battle in anime\n2. Enies Lobby — "I want to live!" 😭\n3. Wano — most beautiful visually\n4. Water 7 — emotional depth\n5. Whole Cake Island — Sanji backstory\n\n💡 Story gets INCREDIBLE after episode 517! Push through early arcs! 🏆`},
+  {k:["demon slayer","kimetsu","tanjiro"],r:`🔥 DEMON SLAYER — Most Beautiful Animation:\n\n📺 Seasons:\n• Season 1: 26 eps\n• Mugen Train Movie: 117 min (ICONIC Rengoku!)\n• Entertainment District: 11 eps\n• Swordsmith Village: 11 eps\n• Hashira Training: Ongoing!\n\n⭐ MAL: 8.7/10\n🎬 Studio: ufotable — GOAT animation studio\n\n📖 Story: Tanjiro's family killed by Muzan. Sister Nezuko turned into demon. He joins Demon Slayer Corps to cure her and avenge his family!\n\n💙 Why Special:\n• THE most stunning animation EVER\n• Breathing techniques = incredible fights\n• You cry for the demons too\n• Rengoku's death devastated MILLIONS\n\n"Set your heart ablaze!" — Rengoku 🔥`},
+  {k:["attack on titan","aot","eren","shingeki"],r:`⚔️ ATTACK ON TITAN — True Masterpiece:\n\n📺 Episodes: 87\n⭐ MAL: 9.0/10\n📅 Completed 2023\n\n📖 Story: Humanity behind walls vs giant Titans. Eren Yeager's mother eaten → vows to kill all Titans. But the truth is FAR deeper...\n\n🔥 What Makes It Perfect:\n• Greatest plot twist in TV history (ep 25 + S3P2)\n• Story completely changes direction multiple times\n• Music by Hiroyuki Sawano = legendary\n• Themes of freedom, war, cycles of hatred\n\n🏆 Best Arcs:\n1. Return to Shiganshina (S3P2) — possibly greatest season ever?\n2. Marley Arc — perspective-shattering\n3. Battle of Trost\n\n⚠️ Ending is divisive, but the journey = MASTERPIECE! 🎌`},
+  {k:["jujutsu kaisen","jjk","gojo","itadori"],r:`💥 JUJUTSU KAISEN — New Generation King:\n\n📺 Seasons:\n• Season 1: 24 eps\n• JJK 0 Movie: 105 min\n• Season 2: 23 eps (Shibuya = INSANE)\n• Season 3: Currently airing!\n\n⭐ MAL: 8.6/10\n🎬 Studio: MAPPA\n\n📖 Story: Yuji Itadori swallows Sukuna's cursed finger, becomes vessel for the King of Curses, attends Jujutsu High to fight Cursed Spirits!\n\n⚡ Why Incredible:\n• MAPPA animation is jaw-dropping\n• Gojo = most hyped character in modern anime\n• "Throughout heaven and earth, I alone am the honored one!"\n• Shibuya Incident = non-stop shocks\n• Deaths hit HARD — no one is safe!\n\n🔥 Shibuya Incident arc = most intense thing anime has produced in years! ⚡`},
+  {k:["death note","light","kira","ryuk"],r:`📓 DEATH NOTE — Psychological Masterpiece:\n\n📺 Episodes: 37\n⭐ MAL: 9.0/10\n📅 2006-2007 (still perfect)\n\n📖 Story: Genius student Light Yagami finds supernatural notebook — write anyone's name = they die! He becomes "Kira" to create crime-free world. Detective L hunts him!\n\n🧠 What Makes It Special:\n• Greatest cat-and-mouse thriller EVER made\n• Light vs L = greatest rivalry in fiction\n• Every episode is tense — constantly on edge\n• Moral philosophy: Is killing criminals justified?\n\n⚠️ Episodes 1-25 are near-PERFECT television!\n\n💡 You'll root for BOTH characters simultaneously — that's the genius! 🔥`},
+  {k:["fullmetal alchemist","fma","brotherhood","edward"],r:`⚗️ FULLMETAL ALCHEMIST: BROTHERHOOD — The Greatest:\n\n📺 Episodes: 64\n⭐ MAL: 9.1/10 — RANKED #1 for years!\n\n📖 Story: Brothers Ed and Al attempt forbidden human transmutation to resurrect their mother. It fails catastrophically — Ed loses arm & leg, Al loses his ENTIRE BODY! They search for the Philosopher's Stone to restore themselves but uncover a massive conspiracy!\n\n🏆 Why It's Considered Perfect:\n✅ 64 episodes, ZERO filler\n✅ Every character is meaningful\n✅ Themes: sacrifice, family, what makes us human\n✅ Best villain reveal — Father & Homunculi\n✅ DEEPLY satisfying ending\n✅ Perfect for ALL ages and experience levels\n\nIf you watch ONE anime in your life — make it this! 🏆🔥`},
+  {k:["strongest","most powerful","overpowered","op character"],r:`⚡ STRONGEST ANIME CHARACTERS:\n\n🥇 LITERALLY UNBEATABLE:\n1. Saitama (OPM) — one punch kills anyone\n2. Zeno (DBS) — erases universes instantly\n3. Anos Voldigoad — killed time itself\n\n🔥 GOD TIER:\n4. Goku — Ultra Instinct, keeps breaking limits\n5. Rimuru Tempest — becomes a deity\n6. Alucard — millions of souls, unkillable\n\n💥 BROKEN:\n7. Satoru Gojo — "I alone am the honored one"\n8. Meruem (HxH) — peak human potential\n9. Madara Uchiha — fought an entire army alone\n10. Yhwach — sees all futures\n11. Escanor — literally invincible at noon\n12. Accelerator — controls all vectors\n\n⚔️ ELITE:\n13. Ichigo (final form)\n14. Naruto (Six Paths)\n15. Eren (Rumbling form) 🔥`},
+  {k:["best villain","greatest villain","anime villain"],r:`😈 GREATEST ANIME VILLAINS:\n\n🥇 ALL-TIME LEGENDARY:\n1. Johan Liebert (Monster) — scariest villain in anime. No powers, just pure psychological evil. Terrifying.\n2. Griffith (Berserk) — beautiful, brilliant, utterly monstrous\n3. Light Yagami (Death Note) — greatest anti-villain\n\n🔥 ICONIC:\n4. Madara Uchiha — "Wake up to reality"\n5. Aizen Sosuke — manipulation genius\n6. Frieza — original iconic villain\n7. Meruem (HxH) — tragic complex villain\n8. Muzan — demon king, genuinely threatening\n\n💥 EXCELLENT:\n9. Pain/Nagato — "Do you understand pain now?"\n10. Doflamingo — charismatic evil\n11. Dio Brando — "ZA WARUDO!"\n12. Shigaraki — becomes genuinely terrifying 🔥`},
+  {k:["best movie","anime movie","film"],r:`🎬 GREATEST ANIME MOVIES:\n\n🥇 LEGENDARY:\n1. Spirited Away — Oscar winner. Greatest animated film ever?\n2. Your Name — highest-grossing anime film. Emotional masterpiece.\n3. Princess Mononoke — nature vs humanity epic\n4. Grave of the Fireflies — most devastating war film EVER\n5. A Silent Voice — bullying, redemption, deaf protagonist. Will make you cry.\n\n🔥 EXCELLENT:\n6. Demon Slayer: Mugen Train — highest-grossing anime film ($500M+)\n7. Weathering with You — Shinkai beauty\n8. I Want to Eat Your Pancreas — tragic and beautiful\n9. Wolf Children — mother raises werewolf children\n10. The Boy and the Heron (2023) — Miyazaki's final film\n\n💡 Start with Spirited Away or Your Name! 🎌`},
+  {k:["saddest","made me cry","cry","emotional","heartbreaking"],r:`😭 SADDEST ANIME MOMENTS (SPOILERS!):\n\n💔 ABSOLUTE HEARTBREAKERS:\n1. Clannad After Story — Nagisa's death. Legendary. Millions cried.\n2. Your Lie in April — the ending letter. 😭\n3. Anohana — "Thank you for finding me."\n4. Violet Evergarden Ep 10 — mother's final letter\n5. A Silent Voice — rooftop scene\n\n😢 MAJOR:\n6. One Piece — Going Merry's funeral. A SHIP's death made millions cry.\n7. Naruto — Jiraiya's death\n8. FMA Brotherhood — Hughes' death. "It's raining." 😭\n9. AOT — Sasha's death (absolute shock)\n10. HxH — Netero vs Meruem aftermath\n\n💀 DEVASTATING:\n11. Grave of the Fireflies — the entire movie\n12. Re:Zero — Rem's "I love you, Subaru"\n13. Demon Slayer — Rengoku: "Set your heart ablaze!"\n\nHave tissues ready! 😭🎌`},
+  {k:["best opening","opening song","op","best ost","soundtrack"],r:`🎵 GREATEST ANIME OPENINGS & OSTS:\n\n🥇 ALL-TIME LEGENDARY OPs:\n1. AOT S3P2 — "Shoukei to Shikabane no Michi" — possibly #1 ever\n2. AOT — "Guren no Yumiya" — launched a global phenomenon\n3. Gurren Lagann — "Sorairo Days" — peak hype\n4. FMA Brotherhood — "Again" by YUI\n5. Demon Slayer — "Gurenge" by LiSA — went #1 in Japan\n\n🔥 ICONIC:\n6. JJK — "Kaikai Kitan"\n7. Death Note — "The World"\n8. One Piece — "We Are!"\n9. Bleach — "Asterisk"\n10. Naruto — "R★O★C★K★S"\n\n🏆 BEST SOUNDTRACKS:\n• AOT — Hiroyuki Sawano (Vogel im Käfig)\n• Demon Slayer — Yuki Kajiura\n• Cowboy Bebop — Yoko Kanno (Tank!)\n• FMA Brotherhood — Akira Senjou\n• Steins;Gate — Takeshi Abo 😭 🔥`},
+  {k:["where to watch","free anime","watch free","streaming"],r:`🎬 WHERE TO WATCH FREE IN 2026:\n\n✅ BEST OPTIONS:\n1. gogoanime.by — fast, huge library (use .by domain — beware clones!)\n2. Crunchyroll — LEGAL, free with ads, biggest legal library\n3. Tubi — LEGAL, free, no sign-up. Naruto, One Piece, Death Note included!\n4. Bilibili.tv — best for Donghua (Chinese anime)\n\n⚠️ SHUT DOWN (RIP):\n• AnimeKai/AniKai — closed 2025\n• HiAnime/AniWatch — closed 2025\n• 9Anime/AniWave — closed August 2024\n• Funimation — merged into Crunchyroll\n\n💡 Go to AniTrack's 🎬 Watch tab → search any anime → tap any site button to open the show directly! 🔥`},
+  {k:["recommend","suggestion","what to watch","help me choose"],r:`🎌 Let me find you something PERFECT!\n\nTell me:\n1️⃣ Genre? Action / Romance / Comedy / Horror / Fantasy / Sci-Fi?\n2️⃣ Length? Short (12 eps) / Medium (24-50) / Long (100+)?\n3️⃣ Mood? Hype / Emotional / Relaxing / Dark?\n4️⃣ Any anime you already loved?\n\nOr tap the quick buttons above for instant picks! ⚡🔥`},
+];
+
+function getAIReply(msg){
+  const m=msg.toLowerCase().trim();
+  for(const e of KB){if(e.k.some(k=>m.includes(k)))return e.r;}
+  if(m.includes("schedule")||m.includes("today")||m.includes("airing")||m.includes("when"))
+    return`📅 For daily schedules — check AniTrack's 📅 Daily Updates tab!\n\nIt shows:\n🔴 Today's airing anime highlighted\n📺 Episode counts per anime\n🌸 Current season overview\n⏰ Broadcast times\n📅 Mon-Sun schedule\n🔄 Refresh for latest data\n\nAll powered by MyAnimeList — updated daily! ⚡`;
+  if(m.includes("episode")||m.includes("season")||m.includes("how many"))
+    return`For exact episode/season info — search the anime in 🔍 Browse tab for real-time MyAnimeList data!\n\nOr ask me specifically like:\n"Tell me about Naruto" or "Tell me about One Piece"\nand I'll give you the FULL breakdown! 🎌🔥`;
+  if(m.includes("manga")||m.includes("read"))
+    return`For manga — use AniTrack's 📖 Manga tab powered by MangaDex!\n\nOr ask me:\n• "Best manga to read?"\n• "Best manhwa?"\n• About specific manga titles!\n\nMangaDex has the largest free manga library! 🔥🎌`;
+  return`Hey!! 🔥⚡ Ask me about:\n\n⚔️ Best anime by genre\n📺 Info on popular anime (Naruto, AOT, JJK, etc)\n📅 Daily schedule (check Daily Updates tab!)\n📖 Best manga/manhwa\n⭐ Strongest characters\n😈 Greatest villains\n😭 Saddest moments\n🎵 Best openings/OSTs\n🎬 Best anime movies\n\nTap quick buttons above or ask something like "Tell me about Attack on Titan"! 🎌🔥`;
+}
+
+function quickAsk(q){document.getElementById("ai-input").value=q;sendAI();}
+
+async function sendAI(){
+  const inp=document.getElementById("ai-input");
+  const msg=inp.value.trim();if(!msg)return;
+  inp.value="";
+  addMsg(msg,"user");
+
+  // YOUR ANTHROPIC API KEY — paste it between the quotes below
+  const apiKey = "NOT_USED_SEE_FIREBASE_FUNCTIONS";
+
+  if(apiKey && apiKey !== "NOT_USED_SEE_FIREBASE_FUNCTIONS"){
+    addTyping();
+    try{
+      const resp = await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json",
+          "x-api-key": apiKey,
+          "anthropic-version":"2023-06-01",
+          "anthropic-dangerous-direct-browser-access":"true"
+        },
+        body: JSON.stringify({
+          model:"claude-sonnet-4-20250514",
+          max_tokens:600,
+          system:`You are AniBot, the ultimate anime & manga expert AI assistant for AniTrack, created by Excellent Error. You know everything about anime, manga, characters, genres, studios, directors, recommendations, schedules, and Japanese pop culture. You are enthusiastic, knowledgeable, and use emojis naturally. Keep answers concise but packed with value. Use line breaks for readability. Never break character.`,
+          messages:[{role:"user",content:msg}]
+        })
+      });
+      removeTyping();
+      if(resp.ok){
+        const data = await resp.json();
+        const text = data.content?.[0]?.text || "Sorry, I got confused! Try again 🤖";
+        addMsg(text,"bot");
+      } else {
+        addMsg(getAIReply(msg),"bot");
+      }
+    }catch(e){
+      removeTyping();
+      addMsg(getAIReply(msg),"bot");
+    }
+  } else {
+    setTimeout(()=>addMsg(getAIReply(msg),"bot"),350);
+  }
+}
+
+function addTyping(){
+  const wrap=document.getElementById("ai-messages");
+  const div=document.createElement("div");
+  div.className="ai-msg bot";div.id="ai-typing";
+  div.innerHTML=`<div class="bot-name">🤖 AniBot</div><span style="color:#555">thinking<span id="ai-dots">...</span></span>`;
+  wrap.appendChild(div);wrap.scrollTop=wrap.scrollHeight;
+  let d=0;window._dotTimer=setInterval(()=>{
+    const el=document.getElementById("ai-dots");
+    if(el)el.textContent=[".","..","..."][d++%3];
+  },400);
+}
+function removeTyping(){
+  clearInterval(window._dotTimer);
+  const t=document.getElementById("ai-typing");if(t)t.remove();
+}
+function addMsg(text,role){
+  const wrap=document.getElementById("ai-messages");
+  const div=document.createElement("div");
+  div.className=`ai-msg ${role}`;
+  if(role==="bot")div.innerHTML=`<div class="bot-name">🤖 AniBot</div>${text.replace(/\n/g,"<br/>")}`;
+  else div.textContent=text;
+  wrap.appendChild(div);wrap.scrollTop=wrap.scrollHeight;
+}
+
+// ===== DEV =====
+const DEV_PW = atob("R29vZG5lc3M4NjczQA==");
+const DEV_UID = "BP94KVayBFhialbzEXvSv7b5oE03"; // Excellent Error
+
+function openDev(){
+  // Only show DEV panel to owner account
+  if(window._currentUser && window._currentUser.uid === DEV_UID){
+    document.getElementById("dev-panel").style.display = "block";
+    devLogin(); // auto-unlock for owner
+    return;
+  }
+  // Everyone else still needs password
+  document.getElementById("dev-panel").style.display = "block";
+}
+function closeDev(){ document.getElementById("dev-panel").style.display="none"; document.getElementById("dev-pass").value=""; }
+function devLogin(){
+  const pw = document.getElementById("dev-pass").value;
+  const isOwner = window._currentUser && window._currentUser.uid === DEV_UID;
+  if(pw === DEV_PW || isOwner){
+    document.getElementById("dev-content").style.display = "block";
+    const wl = Object.values(WL);
+    // Fix: case-sensitive status comparison
+    document.getElementById("dv-total").textContent = wl.length;
+    document.getElementById("dv-w").textContent = wl.filter(a=>a.status==="Watching").length;
+    document.getElementById("dv-c").textContent = wl.filter(a=>a.status==="Completed").length;
+    document.getElementById("dv-p").textContent = wl.filter(a=>a.status==="Plan to Watch").length;
+    document.getElementById("dv-d").textContent = wl.filter(a=>a.status==="Dropped").length;
+    // Show signed-in user info
+    const user = window._currentUser;
+    const userInfoEl = document.getElementById("dv-user-info");
+    if(userInfoEl && user){
+      userInfoEl.innerHTML = `
+        <div class="dev-stat"><span>Signed In As</span><span style="color:#00ff88">${escHtml(user.displayName||"—")}</span></div>
+        <div class="dev-stat"><span>Email</span><span>${escHtml(user.email)}</span></div>
+        <div class="dev-stat"><span>UID</span><span style="font-size:8px;color:#444">${user.uid}</span></div>
+        <div class="dev-stat"><span>Auth Provider</span><span>${user.providerData?.[0]?.providerId||"—"}</span></div>
+      `;
+    }
+    // Preferred site
+    const siteEl = document.getElementById("dv-pref-site");
+    if(siteEl) siteEl.textContent = localStorage.getItem("pref_watch_site") || "gogo";
+    if(!isOwner) notif("Developer access granted! 🛡️","#a855f7");
+  } else {
+    notif("Wrong password! ❌","#ff4466");
+  }
+}
+function exportData(){
+  const b=new Blob([JSON.stringify(WL,null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="anitrack-data.json";a.click();
+  notif("Exported! 📤","#00ff88");
+}
+function clearAll(){if(confirm("Clear ALL watchlist data?")){WL={};saveWL();renderStats();updateMLTab();notif("Cleared!","#ff4466");}}
+function setL(t,on){
+  document.getElementById(t+"-load").style.display=on?"":"none";
+  const g=document.getElementById(t==="manga"?"manga-grid":t+"-grid");
+  if(g)g.style.display=on?"none":"";
+}
+
+// ===== AUTH UI =====
+let _authMode = "signin";
+function openAuthModal(){
+  document.getElementById("auth-modal").style.display = "block";
+  document.body.style.overflow = "hidden";
+}
+function closeAuthModal(){
+  document.getElementById("auth-modal").style.display = "none";
+  document.body.style.overflow = "";
+}
+function switchAuthTab(mode){
+  _authMode = mode;
+  document.getElementById("tab-signin").classList.toggle("active", mode === "signin");
+  document.getElementById("tab-signup").classList.toggle("active", mode === "signup");
+  document.getElementById("auth-submit-btn").textContent = mode === "signin" ? "Sign In" : "Create Account";
+  // Show name field only for signup
+  const nameField = document.getElementById("auth-name");
+  if(nameField) nameField.style.display = mode === "signup" ? "block" : "none";
+}
+function authSubmit(){
+  if(_authMode === "signin") window.doSignIn();
+  else window.doSignUp();
+}
+
+// ===== EXPOSE GLOBALS FOR FIREBASE MODULE =====
+window.WL              = WL;
+window.renderStats     = renderStats;
+window.updateMLTab     = updateMLTab;
+window.renderMyList    = renderMyList;
+window.renderProfilePage = renderProfilePage;
+window.notif           = notif;
+window.curTab          = curTab;
+window.switchAuthTab   = switchAuthTab;
+window.escHtml         = escHtml;
+
+// ===== INIT =====
+renderStats(); updateMLTab(); initBrowse();
+setupInfiniteScroll();
+renderNotifList(); updateNotifBadge();
+// Restore site preference
+const savedSite = localStorage.getItem("pref_watch_site") || "gogo";
+document.querySelectorAll(".site-pick-btn").forEach(b => b.classList.remove("active"));
+document.getElementById(`site-pick-${savedSite}`)?.classList.add("active");
+// Push welcome notification for new sessions
+if(notifications.length === 0){
+  pushNotif("Welcome to AniTrack! 🎌", "Sign in to sync your watchlist across all devices.", "info");
+}
+</script>
+</body>
+</html>
